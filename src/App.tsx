@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, CheckCircle, AlertCircle, Settings, Key, Save } from 'lucide-react';
+import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -121,14 +121,24 @@ export default function App() {
             <div className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-100">
               <div className="font-medium text-gray-700 mb-2">持久化存储状态</div>
               {hasKv ? (
-                <div className="flex items-center gap-2 text-green-600 font-medium">
-                  <CheckCircle className="w-5 h-5" />
-                  Vercel KV 已连接
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-green-600 font-medium">
+                    <CheckCircle className="w-5 h-5" />
+                    Vercel KV 已连接
+                  </div>
+                  <a href="/api/store" target="_blank" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                    <Database className="w-4 h-4" /> 查看数据
+                  </a>
                 </div>
               ) : (
-                <div className="flex items-center gap-2 text-amber-600 font-medium">
-                  <AlertCircle className="w-5 h-5" />
-                  使用内存 (重启会丢失)
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-amber-600 font-medium">
+                    <AlertCircle className="w-5 h-5" />
+                    使用内存 (重启会丢失)
+                  </div>
+                  <a href="/api/store" target="_blank" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                    <Database className="w-4 h-4" /> 查看数据
+                  </a>
                 </div>
               )}
             </div>

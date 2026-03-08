@@ -101,6 +101,32 @@ app.get('/api/config', async (req, res) => {
   res.json({ ...config, hasKv: !!process.env.KV_REST_API_URL });
 });
 
+// API to view current store data
+app.get('/api/store', async (req, res) => {
+  try {
+    if (process.env.KV_REST_API_URL) {
+      // Vercel KV doesn't easily allow listing all keys without scanning, 
+      // but we can fetch the known keys for debugging.
+      const config = await kv.get('bot_config');
+      const chatHistory = await kv.get('chat_history');
+      const userFace = await kv.get('user_face');
+      res.json({
+        type: 'Vercel KV',
+        data: { bot_config: config, chat_history: chatHistory, user_face: userFace }
+      });
+    } else {
+      // Memory store is easy to dump
+      const obj = Object.fromEntries(memoryStore);
+      res.json({
+        type: 'Memory Store',
+        data: obj
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API to save config
 app.post('/api/config', async (req, res) => {
   await setStore('bot_config', req.body);

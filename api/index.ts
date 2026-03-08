@@ -176,7 +176,17 @@ app.get('/api/test-gemini', async (req, res) => {
 app.post('/api/webhook', async (req, res) => {
   if (!bot) return res.status(200).send('Bot not configured');
   try {
-    bot.processUpdate(req.body);
+    const update = req.body;
+    
+    // In serverless environments, we must await the handler before sending the response.
+    // bot.processUpdate() triggers events but doesn't wait for async handlers to finish,
+    // causing Vercel to kill the function prematurely (hence the "typing..." but no reply).
+    if (update.message) {
+      await handleMessage(update.message);
+    } else {
+      // For other update types, just process normally (might get cut off, but less critical)
+      bot.processUpdate(update);
+    }
   } catch (e) {
     console.error("Error processing update:", e);
   }
@@ -184,7 +194,7 @@ app.post('/api/webhook', async (req, res) => {
 });
 
 // Main logic handler
-const handleMessage = async (msg: TelegramBot.Message) => {
+async function handleMessage(msg: TelegramBot.Message) {
   if (!bot) return;
   const chatId = msg.chat.id;
   const text = msg.text || msg.caption || '';

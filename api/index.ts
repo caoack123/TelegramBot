@@ -123,6 +123,34 @@ app.get('/api/test-key', (req, res) => {
   });
 });
 
+// Direct test endpoint to call Gemini API and return raw error
+app.get('/api/test-gemini', async (req, res) => {
+  try {
+    const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+    const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: "No API key found" });
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: 'hello',
+    });
+    
+    res.json({ success: true, text: response.text });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      errorName: err.name,
+      errorMessage: err.message,
+      errorStack: err.stack,
+      rawError: JSON.parse(JSON.stringify(err, Object.getOwnPropertyNames(err)))
+    });
+  }
+});
+
 // Webhook endpoint for Telegram
 app.post('/api/webhook', async (req, res) => {
   if (!bot) return res.status(200).send('Bot not configured');

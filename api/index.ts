@@ -109,6 +109,20 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', botActive: !!TELEGRAM_TOKEN });
 });
 
+// Debug endpoint to check API key status securely
+app.get('/api/test-key', (req, res) => {
+  const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+  const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
+  
+  res.json({
+    hasKey: !!apiKey,
+    prefix: apiKey ? apiKey.substring(0, 4) : null,
+    length: apiKey ? apiKey.length : 0,
+    isAIza: apiKey ? apiKey.startsWith('AIza') : false,
+    envKeys: Object.keys(process.env).filter(k => k.includes('KEY') || k.includes('TOKEN'))
+  });
+});
+
 // Webhook endpoint for Telegram
 app.post('/api/webhook', async (req, res) => {
   if (!bot) return res.status(200).send('Bot not configured');

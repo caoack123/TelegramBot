@@ -125,6 +125,25 @@ app.get('/api/test-key', (req, res) => {
   });
 });
 
+// Endpoint to easily set the Telegram webhook
+app.get('/api/set-webhook', async (req, res) => {
+  if (!bot) {
+    return res.status(400).json({ error: "Bot not configured. Check TELEGRAM_BOT_TOKEN." });
+  }
+  try {
+    // req.headers.host will be the Vercel domain (e.g., my-app.vercel.app)
+    const webhookUrl = `https://${req.headers.host}/api/webhook`;
+    await bot.setWebHook(webhookUrl, { drop_pending_updates: true });
+    res.json({ 
+      success: true, 
+      message: "Webhook set successfully!", 
+      webhookUrl: webhookUrl 
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Direct test endpoint to call Gemini API and return raw error
 app.get('/api/test-gemini', async (req, res) => {
   try {

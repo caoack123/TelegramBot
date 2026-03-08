@@ -378,7 +378,13 @@ const handleMessage = async (msg: TelegramBot.Message) => {
 
   } catch (err: any) {
     console.error("Bot logic error:", err);
-    await bot.sendMessage(chatId, `呜呜，我脑子有点卡壳了，等我一下下哦🥺\n\n(Debug Error: ${err.message})`);
+    const isVercel = !!process.env.VERCEL;
+    const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+    const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
+    const keyPrefix = apiKey ? apiKey.substring(0, 4) : 'none';
+    const keyLen = apiKey ? apiKey.length : 0;
+    
+    await bot.sendMessage(chatId, `呜呜，我脑子有点卡壳了，等我一下下哦🥺\n\n[Env: ${isVercel ? 'Vercel' : 'Local'}, Key: ${keyPrefix}...(${keyLen})]\n(Debug Error: ${err.message})`);
   }
 };
 

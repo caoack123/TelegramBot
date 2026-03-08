@@ -162,12 +162,16 @@ const handleMessage = async (msg: TelegramBot.Message) => {
   const newHistory = [...history, { role: 'user', parts: [{ text: historyText }] }];
 
   try {
-    const rawApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
-    const apiKey = rawApiKey.trim();
+    const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+    // Remove accidental quotes and spaces
+    const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
     
     if (!apiKey && config.textProvider === 'gemini') {
       throw new Error("未找到 Gemini API Key。请在 Vercel 的 Environment Variables 中配置 GEMINI_API_KEY。");
     }
+
+    // Debug log to help identify key issues (only logs prefix and length, safe for production)
+    console.log(`[Debug] Using API Key starting with: ${apiKey.substring(0, 4)}..., Length: ${apiKey.length}`);
     
     const ai = new GoogleGenAI({ apiKey });
     let botTextFull = '';

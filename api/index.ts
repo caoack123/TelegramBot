@@ -85,12 +85,14 @@ let bot: TelegramBot | null = null;
 if (TELEGRAM_TOKEN) {
   bot = new TelegramBot(TELEGRAM_TOKEN);
   // In production (Vercel), you would set the webhook URL via Telegram API.
-  // For local dev, we can still use polling if we want, but let's stick to webhook architecture.
-  // If running locally, you need ngrok or similar to receive webhooks, or just fallback to polling for dev.
+  // Polling is disabled here to prevent the local/preview environment from 
+  // stealing messages that should go to the Vercel webhook.
+  /*
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     console.log("Starting Telegram Bot in Polling mode for local development...");
     bot.startPolling();
   }
+  */
 }
 
 // API to get config

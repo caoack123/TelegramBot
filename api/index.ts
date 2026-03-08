@@ -105,14 +105,20 @@ app.get('/api/config', async (req, res) => {
 app.get('/api/store', async (req, res) => {
   try {
     if (process.env.KV_REST_API_URL) {
-      // Vercel KV doesn't easily allow listing all keys without scanning, 
-      // but we can fetch the known keys for debugging.
-      const config = await kv.get('bot_config');
-      const chatHistory = await kv.get('chat_history');
-      const userFace = await kv.get('user_face');
+      // Fetch all keys from Vercel KV
+      const keys = await kv.keys('*');
+      const data: Record<string, any> = {};
+      
+      if (keys.length > 0) {
+        // Fetch values for all keys
+        for (const key of keys) {
+          data[key] = await kv.get(key);
+        }
+      }
+      
       res.json({
         type: 'Vercel KV',
-        data: { bot_config: config, chat_history: chatHistory, user_face: userFace }
+        data: data
       });
     } else {
       // Memory store is easy to dump

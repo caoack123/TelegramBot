@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database } from 'lucide-react';
+import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database, MessageSquare, Image as ImageIcon, Code, RefreshCw } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -15,6 +15,11 @@ export default function App() {
   const [hasPaidKey, setHasPaidKey] = useState(false);
   const [hasKv, setHasKv] = useState(false);
   const [saving, setSaving] = useState(false);
+  
+  // Tabs
+  const [activeTab, setActiveTab] = useState<'config' | 'store'>('config');
+  const [storeData, setStoreData] = useState<any>(null);
+  const [loadingStore, setLoadingStore] = useState(false);
   
   // Models and Prompt State
   const [textProvider, setTextProvider] = useState<'gemini' | 'openrouter'>('gemini');
@@ -90,6 +95,116 @@ export default function App() {
     }
   };
 
+  const fetchStoreData = async () => {
+    setLoadingStore(true);
+    try {
+      const res = await fetch('/api/store');
+      const data = await res.json();
+      setStoreData(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingStore(false);
+    }
+  };
+
+  const renderStoreView = () => {
+    if (loadingStore) {
+      return <div className="p-12 text-center text-gray-500 flex flex-col items-center"><RefreshCw className="w-8 h-8 animate-spin mb-4 text-blue-500" />加载数据中...</div>;
+    }
+    if (!storeData) {
+      return <div className="p-12 text-center text-gray-500">暂无数据</div>;
+    }
+
+    const data = storeData.data || {};
+    const keys = Object.keys(data);
+    
+    const historyKeys = keys.filter(k => k.startsWith('history_'));
+    const faceKeys = keys.filter(k => k.startsWith('user_face_'));
+    const otherKeys = keys.filter(k => !k.startsWith('history_') && !k.startsWith('user_face_'));
+
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2 text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg text-sm font-medium">
+            <Database className="w-4 h-4" />
+            当前存储类型: {storeData.type}
+          </div>
+          <button onClick={fetchStoreData} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 bg-gray-100 px-3 py-1.5 rounded-lg transition-colors">
+            <RefreshCw className="w-4 h-4" /> 刷新数据
+          </button>
+        </div>
+
+        {/* Chat Histories */}
+        {historyKeys.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2 border-b border-gray-100 pb-2">
+              <MessageSquare className="w-5 h-5 text-blue-500" /> 聊天记录
+            </h3>
+            {historyKeys.map(key => {
+              const chatId = key.replace('history_', '');
+              const history = data[key] || [];
+              return (
+                <div key={key} className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                  <div className="text-xs text-gray-500 mb-3 font-mono">Chat ID: {chatId}</div>
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+                    {history.map((msg: any, i: number) => (
+                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+                          msg.role === 'user' 
+                            ? 'bg-blue-500 text-white rounded-tr-sm' 
+                            : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
+                        }`}>
+                          {msg.parts?.[0]?.text || '[多媒体消息]'}
+                        </div>
+                      </div>
+                    ))}
+                    {history.length === 0 && <div className="text-sm text-gray-400 text-center">暂无聊天记录</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Saved Faces */}
+        {faceKeys.length > 0 && (
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2 border-b border-gray-100 pb-2">
+              <ImageIcon className="w-5 h-5 text-pink-500" /> 记住的脸
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {faceKeys.map(key => {
+                const chatId = key.replace('user_face_', '');
+                return (
+                  <div key={key} className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm flex flex-col items-center">
+                    <img src={`data:image/jpeg;base64,${data[key]}`} alt="User Face" className="w-24 h-24 object-cover rounded-full mb-2 border-2 border-pink-100" referrerPolicy="no-referrer" />
+                    <div className="text-xs text-gray-500 font-mono text-center truncate w-full">ID: {chatId}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Other Configs */}
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2 border-b border-gray-100 pb-2">
+            <Code className="w-5 h-5 text-gray-500" /> 其他配置数据
+          </h3>
+          {otherKeys.map(key => (
+            <div key={key} className="bg-gray-900 rounded-xl p-4 overflow-x-auto">
+              <div className="text-xs text-gray-400 mb-2 font-mono">{key}</div>
+              <pre className="text-xs text-green-400 font-mono whitespace-pre-wrap">
+                {JSON.stringify(data[key], null, 2)}
+              </pre>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 font-sans">
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
@@ -99,52 +214,69 @@ export default function App() {
           <p className="text-blue-100">Vercel Serverless 就绪版控制台</p>
         </div>
         
+        <div className="flex border-b border-gray-200 bg-gray-50">
+          <button 
+            onClick={() => setActiveTab('config')} 
+            className={`flex-1 py-4 font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'config' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:bg-gray-100'}`}
+          >
+            <Settings className="w-4 h-4" /> 机器人配置
+          </button>
+          <button 
+            onClick={() => { setActiveTab('store'); fetchStoreData(); }} 
+            className={`flex-1 py-4 font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'store' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-gray-500 hover:bg-gray-100'}`}
+          >
+            <Database className="w-4 h-4" /> 后台数据
+          </button>
+        </div>
+        
         <div className="p-8">
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <div className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-100">
-              <div className="font-medium text-gray-700 mb-2">Bot 后端状态</div>
-              {status === 'loading' && <span className="text-gray-400">检查中...</span>}
-              {status === 'active' && (
-                <div className="flex items-center gap-2 text-green-600 font-medium">
-                  <CheckCircle className="w-5 h-5" />
-                  运行中
+          {activeTab === 'config' ? (
+            <>
+              <div className="grid grid-cols-2 gap-4 mb-8">
+                <div className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <div className="font-medium text-gray-700 mb-2">Bot 后端状态</div>
+                  {status === 'loading' && <span className="text-gray-400">检查中...</span>}
+                  {status === 'active' && (
+                    <div className="flex items-center gap-2 text-green-600 font-medium">
+                      <CheckCircle className="w-5 h-5" />
+                      运行中
+                    </div>
+                  )}
+                  {status === 'inactive' && (
+                    <div className="flex items-center gap-2 text-red-600 font-medium">
+                      <AlertCircle className="w-5 h-5" />
+                      未启动 (缺少 Token)
+                    </div>
+                  )}
                 </div>
-              )}
-              {status === 'inactive' && (
-                <div className="flex items-center gap-2 text-red-600 font-medium">
-                  <AlertCircle className="w-5 h-5" />
-                  未启动 (缺少 Token)
-                </div>
-              )}
-            </div>
 
-            <div className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-100">
-              <div className="font-medium text-gray-700 mb-2">持久化存储状态</div>
-              {hasKv ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-green-600 font-medium">
-                    <CheckCircle className="w-5 h-5" />
-                    Vercel KV 已连接
-                  </div>
-                  <a href="/api/store" target="_blank" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
-                    <Database className="w-4 h-4" /> 查看数据
-                  </a>
+                <div className="flex flex-col p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <div className="font-medium text-gray-700 mb-2">持久化存储状态</div>
+                  {hasKv ? (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-green-600 font-medium">
+                        <CheckCircle className="w-5 h-5" />
+                        Vercel KV 已连接
+                      </div>
+                      <button onClick={() => { setActiveTab('store'); fetchStoreData(); }} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                        <Database className="w-4 h-4" /> 查看数据
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-amber-600 font-medium">
+                        <AlertCircle className="w-5 h-5" />
+                        使用内存 (重启会丢失)
+                      </div>
+                      <button onClick={() => { setActiveTab('store'); fetchStoreData(); }} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                        <Database className="w-4 h-4" /> 查看数据
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-amber-600 font-medium">
-                    <AlertCircle className="w-5 h-5" />
-                    使用内存 (重启会丢失)
-                  </div>
-                  <a href="/api/store" target="_blank" className="text-sm text-blue-600 hover:underline flex items-center gap-1">
-                    <Database className="w-4 h-4" /> 查看数据
-                  </a>
-                </div>
-              )}
-            </div>
-          </div>
+              </div>
 
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-8">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-gray-600" />
@@ -247,6 +379,10 @@ export default function App() {
             <strong>🎉 架构已升级：</strong><br/>
             现在 AI 大脑已经完全迁移到后端！你<strong>不再需要保持这个页面打开</strong>，Bot 也能随时回复你。配置保存在后端，支持 Vercel KV 持久化存储。
           </div>
+          </>
+          ) : (
+            renderStoreView()
+          )}
         </div>
       </div>
     </div>

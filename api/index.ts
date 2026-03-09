@@ -409,7 +409,11 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
       const orMessages: {role: string, content: string}[] = [];
       if (activeSystemPrompt) {
-        orMessages.push({ role: "system", content: activeSystemPrompt });
+        if (normalizedMessages.length > 0) {
+          normalizedMessages[0].content = activeSystemPrompt + '\n\n' + normalizedMessages[0].content;
+        } else {
+          normalizedMessages.push({ role: 'user', content: activeSystemPrompt });
+        }
       }
       orMessages.push(...normalizedMessages);
       
@@ -430,7 +434,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(`OpenRouter Error: ${errData.error?.message || res.statusText}`);
+        const rawError = errData.error?.metadata?.raw || errData.error?.metadata || '';
+        const rawErrorStr = typeof rawError === 'object' ? JSON.stringify(rawError) : rawError;
+        throw new Error(`OpenRouter Error: ${errData.error?.message || res.statusText}${rawErrorStr ? ` | Raw: ${rawErrorStr}` : ''}`);
       }
       const data = await res.json();
       botTextFull = data.choices?.[0]?.message?.content || '';

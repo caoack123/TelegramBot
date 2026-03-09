@@ -384,19 +384,42 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
     if (config.textProvider === 'openrouter') {
       if (!config.openRouterApiKey) throw new Error("请先配置 OpenRouter API Key");
-      const orMessages = [
-        { role: "system", content: activeSystemPrompt },
-        ...newHistory.map(m => ({
-          role: m.role === 'model' ? 'assistant' : 'user',
-          content: m.parts[0].text
-        }))
-      ];
+      
+      // Normalize messages for strict providers like Anthropic
+      const normalizedMessages: {role: string, content: string}[] = [];
+      let lastRole = '';
+      
+      for (const m of newHistory) {
+        const role = m.role === 'model' ? 'assistant' : 'user';
+        const content = m.parts[0]?.text || '';
+        if (!content) continue;
+        
+        if (role === lastRole && normalizedMessages.length > 0) {
+          normalizedMessages[normalizedMessages.length - 1].content += '\n' + content;
+        } else {
+          normalizedMessages.push({ role, content });
+          lastRole = role;
+        }
+      }
+      
+      // Anthropic requires the first message to be 'user'
+      if (normalizedMessages.length > 0 && normalizedMessages[0].role === 'assistant') {
+        normalizedMessages.shift();
+      }
+
+      const orMessages: {role: string, content: string}[] = [];
+      if (activeSystemPrompt) {
+        orMessages.push({ role: "system", content: activeSystemPrompt });
+      }
+      orMessages.push(...normalizedMessages);
       
       const res = await fetchWithRetry(() => fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${config.openRouterApiKey}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "HTTP-Referer": baseUrl,
+          "X-Title": "Telegram Bot"
         },
         body: JSON.stringify({
           model: config.openRouterModel,
@@ -580,12 +603,30 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
   } catch (err: any) {
     console.error("Bot logic error:", err);
     const isVercel = !!process.env.VERCEL;
-    const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
-    const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
-    const keyPrefix = apiKey ? apiKey.substring(0, 4) : 'none';
-    const keyLen = apiKey ? apiKey.length : 0;
     
-    await bot.sendMessage(chatId, `呜呜，我脑子有点卡壳了，等我一下下哦🥺\n\n[Env: ${isVercel ? 'Vercel' : 'Local'}, Key: ${keyPrefix}...(${keyLen})]\n(Debug Error: ${err.message})`);
+    let keyPrefix = 'none';
+    let keyLen = 0;
+    let providerName = 'Unknown';
+    
+    try {
+      const config = await getStore('bot_config', DEFAULT_CONFIG);
+      if (config.textProvider === 'openrouter') {
+        providerName = 'OpenRouter';
+        const orKey = config.openRouterApiKey || '';
+        keyPrefix = orKey ? orKey.substring(0, 4) : 'none';
+        keyLen = orKey ? orKey.length : 0;
+      } else {
+        providerName = 'Gemini';
+        const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+        const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
+        keyPrefix = apiKey ? apiKey.substring(0, 4) : 'none';
+        keyLen = apiKey ? apiKey.length : 0;
+      }
+    } catch (e) {
+      // Fallback if config fetch fails
+    }
+    
+    await bot.sendMessage(chatId, `呜呜，我脑子有点卡壳了，等我一下下哦🥺\n\n[Env: ${isVercel ? 'Vercel' : 'Local'}, Provider: ${providerName}, Key: ${keyPrefix}...(${keyLen})]\n(Debug Error: ${err.message})`);
   }
 };
 

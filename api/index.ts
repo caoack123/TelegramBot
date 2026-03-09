@@ -565,7 +565,8 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
             body: JSON.stringify({
               model: config.customImageModel,
               prompt: photoPrompt,
-              return_binary: false
+              return_binary: false,
+              safe_mode: false
             })
           }));
           

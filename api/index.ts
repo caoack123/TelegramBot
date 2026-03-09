@@ -580,7 +580,8 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           let imageUrl = data.data?.[0]?.url || data.url || '';
           
           if (imageBase64) {
-            await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+            const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+            await bot.sendPhoto(chatId, Buffer.from(base64Data, 'base64'));
           } else if (imageUrl) {
             const imgRes = await fetchWithRetry(() => fetch(imageUrl));
             const imgBuf = await imgRes.arrayBuffer();
@@ -643,7 +644,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
         if (imgErr.message?.includes('PERMISSION_DENIED')) {
           await bot.sendMessage(chatId, "(呜呜，生成照片需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
         } else {
-          await bot.sendMessage(chatId, "(呜呜，照片没拍好，等下再给你看嘛🥺)");
+          await bot.sendMessage(chatId, `(呜呜，照片没拍好，等下再给你看嘛🥺 错误详情: ${imgErr.message})`);
         }
       }
     }
@@ -716,7 +717,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           if (vidErr.message?.includes('PERMISSION_DENIED')) {
             await bot.sendMessage(chatId, "(呜呜，录视频需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
           } else {
-            await bot.sendMessage(chatId, "(呜呜，视频没录好，等下再给你看嘛🥺)");
+            await bot.sendMessage(chatId, `(呜呜，视频没录好，等下再给你看嘛🥺 错误详情: ${vidErr.message})`);
           }
         }
       }

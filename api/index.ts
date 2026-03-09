@@ -108,6 +108,11 @@ const DEFAULT_CONFIG = {
   customVideoEndpoint: '',
   customVideoApiKey: '',
   customVideoModel: '',
+  enableVoice: false,
+  voiceProvider: 'gemini',
+  voiceModel: 'gemini-2.5-flash-preview-tts',
+  voiceStyle: 'Kore',
+  maxVoiceLength: 100,
   maxHistoryLength: 20,
   systemPrompt: `你是一个基于Telegram的聊天机器人，主打俏皮女友风格。你的名字叫“小雅”。你现在正在和你的男朋友聊天。
 你的性格活泼、爱撒娇、有点小傲娇、喜欢分享日常。你的回复应该简短、自然、充满生活气息，多用emoji。
@@ -524,6 +529,74 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
     if (botText) {
       await bot.sendMessage(chatId, botText);
+    }
+
+    if (config.enableVoice && botText) {
+      try {
+        let textToRead = botText.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, ''); // Remove emojis for better TTS
+        if (config.maxVoiceLength && textToRead.length > config.maxVoiceLength) {
+          textToRead = textToRead.substring(0, config.maxVoiceLength);
+        }
+
+        if (textToRead.trim().length > 0) {
+          bot.sendChatAction(chatId, 'record_voice').catch(() => {});
+          let audioBase64 = '';
+
+          if (config.voiceProvider === 'openrouter') {
+            const apiKey = config.openRouterApiKey;
+            if (!apiKey) throw new Error("OpenRouter API Key not configured");
+
+            const res = await fetchWithRetry(() => fetch("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                model: config.voiceModel || "openai/gpt-4o-mini-audio-preview",
+                messages: [
+                  { role: "system", content: "You are a text-to-speech engine. Please read the following text exactly as provided, with a sweet and natural tone." },
+                  { role: "user", content: textToRead }
+                ],
+                modalities: ["text", "audio"],
+                audio: {
+                  voice: config.voiceStyle || "shimmer",
+                  format: "wav"
+                }
+              })
+            }));
+
+            if (!res.ok) {
+              const err = await res.json().catch(()=>({}));
+              throw new Error(`OpenRouter Voice Error: ${JSON.stringify(err)}`);
+            }
+
+            const data = await res.json();
+            audioBase64 = data.choices?.[0]?.message?.audio?.data || '';
+          } else {
+            // Gemini TTS
+            const response = await fetchWithRetry(() => ai.models.generateContent({
+              model: config.voiceModel || "gemini-2.5-flash-preview-tts",
+              contents: [{ parts: [{ text: textToRead }] }],
+              config: {
+                responseModalities: ["AUDIO"],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: { voiceName: config.voiceStyle || "Kore" }
+                  }
+                }
+              }
+            }));
+            audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || '';
+          }
+
+          if (audioBase64) {
+            await bot.sendVoice(chatId, Buffer.from(audioBase64, 'base64'));
+          }
+        }
+      } catch (err: any) {
+        console.error("Voice error:", err);
+      }
     }
 
     if (photoPrompt) {

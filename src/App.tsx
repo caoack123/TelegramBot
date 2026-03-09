@@ -43,6 +43,11 @@ export default function App() {
   const [customVideoModel, setCustomVideoModel] = useState('');
   
   const [enableVideo, setEnableVideo] = useState(false);
+  const [enableVoice, setEnableVoice] = useState(false);
+  const [voiceProvider, setVoiceProvider] = useState<'gemini' | 'openrouter'>('gemini');
+  const [voiceModel, setVoiceModel] = useState('gemini-2.5-flash-preview-tts');
+  const [voiceStyle, setVoiceStyle] = useState('Kore');
+  const [maxVoiceLength, setMaxVoiceLength] = useState(100);
   const [maxHistoryLength, setMaxHistoryLength] = useState(20);
   const [systemPrompt, setSystemPrompt] = useState('');
 
@@ -85,6 +90,11 @@ export default function App() {
         setCustomVideoModel(data.customVideoModel || '');
         
         setEnableVideo(data.enableVideo ?? false);
+        setEnableVoice(data.enableVoice ?? false);
+        setVoiceProvider(data.voiceProvider || 'gemini');
+        setVoiceModel(data.voiceModel || 'gemini-2.5-flash-preview-tts');
+        setVoiceStyle(data.voiceStyle || 'Kore');
+        setMaxVoiceLength(data.maxVoiceLength ?? 100);
         setMaxHistoryLength(data.maxHistoryLength ?? 20);
         setSystemPrompt(data.systemPrompt);
         setHasKv(data.hasKv);
@@ -116,6 +126,11 @@ export default function App() {
           customVideoApiKey,
           customVideoModel,
           enableVideo,
+          enableVoice,
+          voiceProvider,
+          voiceModel,
+          voiceStyle,
+          maxVoiceLength,
           maxHistoryLength,
           systemPrompt
         })
@@ -420,6 +435,64 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Voice Settings */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-md font-medium text-gray-800">语音回复 (TTS)</h3>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="text-sm text-gray-600 font-medium">允许发送语音</span>
+                  <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                    <input type="checkbox" checked={enableVoice} onChange={e => setEnableVoice(e.target.checked)} className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out" style={{ transform: enableVoice ? 'translateX(100%)' : 'translateX(0)', borderColor: enableVoice ? '#3B82F6' : '#D1D5DB' }}/>
+                    <div className={`toggle-label block overflow-hidden h-5 rounded-full cursor-pointer transition-colors duration-200 ease-in-out ${enableVoice ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                  </div>
+                </label>
+              </div>
+              
+              {enableVoice && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 border-t border-gray-200 pt-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">语音提供商</label>
+                    <select value={voiceProvider} onChange={e => setVoiceProvider(e.target.value as any)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                      <option value="gemini">Google Gemini TTS (免费)</option>
+                      <option value="openrouter">OpenRouter (如 OpenAI TTS)</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">语音模型</label>
+                    <input type="text" value={voiceModel} onChange={e => setVoiceModel(e.target.value)} placeholder={voiceProvider === 'gemini' ? 'gemini-2.5-flash-preview-tts' : 'openai/gpt-4o-mini-audio-preview'} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">语音风格 (音色)</label>
+                    <select value={voiceStyle} onChange={e => setVoiceStyle(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                      {voiceProvider === 'gemini' ? (
+                        <>
+                          <option value="Kore">Kore (甜美/推荐)</option>
+                          <option value="Aoede">Aoede (知性)</option>
+                          <option value="Puck">Puck (活泼)</option>
+                          <option value="Charon">Charon (成熟)</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="shimmer">Shimmer (甜美/推荐)</option>
+                          <option value="nova">Nova (知性)</option>
+                          <option value="alloy">Alloy (中性)</option>
+                          <option value="echo">Echo (男声)</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">最大语音长度 (字符数)</label>
+                    <input type="number" value={maxVoiceLength} onChange={e => setMaxVoiceLength(Number(e.target.value))} min="10" max="500" className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                    <p className="text-xs text-gray-500 mt-1">限制语音长度，太长可能导致生成超时或费用过高。</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Media Model Settings */}

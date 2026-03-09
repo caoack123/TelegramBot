@@ -3,7 +3,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import { Redis as UpstashRedis } from '@upstash/redis';
 import Redis from 'ioredis';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai';
 
 dotenv.config();
 
@@ -458,8 +458,12 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     if (!config.enableVideo) {
       activeSystemPrompt += "\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
     }
+    
+    // Voice instruction
     if (config.enableVoice) {
-      activeSystemPrompt += "\n[IMPORTANT: 绝对不要在文字中描述“语音”、“声音”或使用 [语音描述：...] 这样的格式。系统会自动把你的文字转换成真实的语音发给用户，你只需要像平时一样打字聊天即可。]";
+      activeSystemPrompt += "\n[IMPORTANT: 如果用户要求你发语音，或者你想主动发语音，请在你的回复文本中包含一个特殊的标记：[VOICE: 你想说的话]。系统会自动把标记里的文字转换成真实的语音发给用户。平时正常聊天不需要加这个标记。绝对不要在文字中说你不能发语音！]";
+    } else {
+      activeSystemPrompt += "\n[IMPORTANT: 语音生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VOICE: ...] 标记。如果用户要求听语音，请委婉地拒绝，比如撒娇说现在不方便发语音。]";
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -563,6 +567,14 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       botText = botText.replace(videoMatch[0], '').trim();
     }
 
+    // Match [VOICE: ...]
+    const voiceMatch = botTextFull.match(/\[VOICE[:：]\s*([\s\S]*?)\]/i);
+    let voicePrompt = '';
+    if (voiceMatch) {
+      voicePrompt = voiceMatch[1];
+      botText = botText.replace(voiceMatch[0], '').trim();
+    }
+
     // Save history initially
     let currentHistory = [...newHistory, { role: 'model', parts: [{ text: botTextFull }] }];
     await setStore(`history_${chatId}`, currentHistory);
@@ -571,9 +583,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       await bot.sendMessage(chatId, botText);
     }
 
-    if (config.enableVoice && botText) {
+    if (config.enableVoice && voicePrompt) {
       try {
-        let textToRead = botText.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, ''); // Remove emojis for better TTS
+        let textToRead = voicePrompt.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, ''); // Remove emojis for better TTS
         if (config.maxVoiceLength && textToRead.length > config.maxVoiceLength) {
           textToRead = textToRead.substring(0, config.maxVoiceLength);
         }
@@ -619,7 +631,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
               model: config.voiceModel || "gemini-2.5-flash-preview-tts",
               contents: [{ parts: [{ text: textToRead }] }],
               config: {
-                responseModalities: ["AUDIO"],
+                responseModalities: [Modality.AUDIO],
                 speechConfig: {
                   voiceConfig: {
                     prebuiltVoiceConfig: { voiceName: config.voiceStyle || "Kore" }

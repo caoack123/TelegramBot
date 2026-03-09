@@ -126,6 +126,28 @@ export default function App() {
     const faceKeys = keys.filter(k => k.startsWith('user_face_'));
     const otherKeys = keys.filter(k => !k.startsWith('history_') && !k.startsWith('user_face_'));
 
+    const renderTextWithLinks = (text: string) => {
+      if (!text) return null;
+      const urlRegex = /(https?:\/\/[^\s\]]+)/g;
+      const parts = text.split(urlRegex);
+      return parts.map((part, i) => {
+        if (part.match(urlRegex)) {
+          return (
+            <a 
+              key={i} 
+              href={part} 
+              target="_blank" 
+              rel="noopener noreferrer" 
+              className="underline font-medium hover:opacity-80"
+            >
+              {part}
+            </a>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      });
+    };
+
     return (
       <div className="space-y-8">
         <div className="flex items-center justify-between mb-4">
@@ -153,12 +175,12 @@ export default function App() {
                   <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
                     {history.map((msg: any, i: number) => (
                       <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+                        <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${
                           msg.role === 'user' 
                             ? 'bg-blue-500 text-white rounded-tr-sm' 
                             : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm'
                         }`}>
-                          {msg.parts?.[0]?.text || '[多媒体消息]'}
+                          {msg.parts?.[0]?.text ? renderTextWithLinks(msg.parts[0].text) : '[多媒体消息]'}
                         </div>
                       </div>
                     ))}

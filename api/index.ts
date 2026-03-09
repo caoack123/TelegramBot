@@ -259,9 +259,20 @@ app.get('/api/file/:fileId', async (req, res) => {
   if (!bot) return res.status(400).send('Bot not configured');
   try {
     const fileLink = await bot.getFileLink(req.params.fileId);
-    res.redirect(fileLink);
+    const response = await fetch(fileLink);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch from Telegram: ${response.statusText}`);
+    }
+    
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', 'inline');
+    
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
   } catch (err: any) {
-    res.status(500).send('Failed to get file link: ' + err.message);
+    res.status(500).send('Failed to get file: ' + err.message);
   }
 });
 

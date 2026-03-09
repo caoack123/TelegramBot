@@ -9,14 +9,22 @@ dotenv.config();
 const PORT = 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
-const redis = (redisUrl && redisToken) ? new Redis({ url: redisUrl, token: redisToken }) : null;
+let redisClient: Redis | null = null;
+function getRedis() {
+  if (redisClient !== null) return redisClient;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  if (redisUrl && redisToken) {
+    redisClient = new Redis({ url: redisUrl, token: redisToken });
+  }
+  return redisClient;
+}
 
 // Fallback in-memory store if Redis is not configured
 const memoryStore = new Map<string, any>();
 
 async function getStore<T>(key: string, defaultValue: T): Promise<T> {
+  const redis = getRedis();
   if (redis) {
     try {
       const val = await redis.get<T>(key);
@@ -30,6 +38,7 @@ async function getStore<T>(key: string, defaultValue: T): Promise<T> {
 }
 
 async function setStore(key: string, value: any): Promise<void> {
+  const redis = getRedis();
   if (redis) {
     try {
       await redis.set(key, value);
@@ -103,12 +112,13 @@ if (TELEGRAM_TOKEN) {
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...config, hasKv: !!redis });
+  res.json({ ...config, hasKv: !!getRedis() });
 });
 
 // API to view current store data
 app.get('/api/store', async (req, res) => {
   try {
+    const redis = getRedis();
     if (redis) {
       // Fetch all keys from Redis
       const keys = await redis.keys('*');
@@ -170,7 +180,7 @@ app.get('/api/set-webhook', async (req, res) => {
   try {
     // req.headers.host will be the Vercel domain (e.g., my-app.vercel.app)
     const webhookUrl = `https://${req.headers.host}/api/webhook`;
-    await bot.setWebHook(webhookUrl, { drop_pending_updates: true });
+    await bot.setWebHook(webhookUrl, { drop_pending_updates: true } as any);
     res.json({ 
       success: true, 
       message: "Webhook set successfully!", 

@@ -130,7 +130,8 @@ const DEFAULT_CONFIG = {
 1. 照片和视频描述必须是英文，并且要详细描述画面细节、人物特征、穿着和环境。
 2. 每次最多只能发一张照片或一段视频。不要同时发。
 3. 不要总是主动发照片或视频，适度即可。
-4. 你的回复要像真实的微信/Telegram聊天，不要像AI。`
+4. 你的回复要像真实的微信/Telegram聊天，不要像AI。
+5. 绝对不要在文字中描述“语音”、“声音”或使用 [语音描述：...] 这样的格式。系统会自动把你的文字转换成真实的语音发给用户，你只需要像平时一样打字聊天即可。`
 };
 
 const fetchWithRetry = async <T,>(fn: () => Promise<T>, maxRetries = 3): Promise<T> => {
@@ -346,13 +347,49 @@ app.post('/api/webhook', async (req, res) => {
 async function handleMessage(msg: TelegramBot.Message, host?: string) {
   if (!bot) return;
   const chatId = msg.chat.id;
-  const text = msg.text || msg.caption || '';
+  let text = msg.text || msg.caption || '';
   let userImageFileId = '';
   
   const baseUrl = host ? `https://${host}` : 'https://telegram-bot-nine-delta.vercel.app';
 
   if (msg.photo && msg.photo.length > 0) {
     userImageFileId = msg.photo[msg.photo.length - 1].file_id;
+  }
+
+  // Handle incoming voice messages
+  if (msg.voice) {
+    try {
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      const fileLink = await bot.getFileLink(msg.voice.file_id);
+      const response = await fetchWithRetry(() => fetch(fileLink));
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      
+      const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+      const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
+      if (!apiKey) throw new Error("No Gemini API key for transcription");
+
+      const ai = new GoogleGenAI({ apiKey });
+      const transcriptionRes = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: {
+          parts: [
+            { inlineData: { data: base64, mimeType: msg.voice.mime_type || 'audio/ogg' } },
+            { text: "Please transcribe this audio exactly as spoken, in the original language. Do not add any commentary." }
+          ]
+        }
+      });
+      
+      text = transcriptionRes.text || '';
+      if (!text) {
+        await bot.sendMessage(chatId, "(呜呜，没听清你在说什么呢🥺)");
+        return;
+      }
+    } catch (err) {
+      console.error("Voice transcription error:", err);
+      await bot.sendMessage(chatId, "(呜呜，语音识别失败了，能打字给我吗🥺)");
+      return;
+    }
   }
 
   if (!text && !userImageFileId) return;
@@ -420,6 +457,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     activeSystemPrompt += "\n\n[IMPORTANT: 如果你要发照片，必须严格使用 [PHOTO: 详细的英文描述] 格式，绝对不能用 [IMAGE: ...] 或中文描述！描述必须是纯英文！]";
     if (!config.enableVideo) {
       activeSystemPrompt += "\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
+    }
+    if (config.enableVoice) {
+      activeSystemPrompt += "\n[IMPORTANT: 绝对不要在文字中描述“语音”、“声音”或使用 [语音描述：...] 这样的格式。系统会自动把你的文字转换成真实的语音发给用户，你只需要像平时一样打字聊天即可。]";
     }
 
     const ai = new GoogleGenAI({ apiKey });

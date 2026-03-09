@@ -254,6 +254,17 @@ app.get('/api/set-webhook', async (req, res) => {
   }
 });
 
+// API to get Telegram file link and redirect (for viewing images in backend)
+app.get('/api/file/:fileId', async (req, res) => {
+  if (!bot) return res.status(400).send('Bot not configured');
+  try {
+    const fileLink = await bot.getFileLink(req.params.fileId);
+    res.redirect(fileLink);
+  } catch (err: any) {
+    res.status(500).send('Failed to get file link: ' + err.message);
+  }
+});
+
 // Direct test endpoint to call Gemini API and return raw error
 app.get('/api/test-gemini', async (req, res) => {
   try {
@@ -292,7 +303,7 @@ app.post('/api/webhook', async (req, res) => {
     // bot.processUpdate() triggers events but doesn't wait for async handlers to finish,
     // causing Vercel to kill the function prematurely (hence the "typing..." but no reply).
     if (update.message) {
-      await handleMessage(update.message);
+      await handleMessage(update.message, req.headers.host);
     } else {
       // For other update types, just process normally (might get cut off, but less critical)
       bot.processUpdate(update);
@@ -304,39 +315,35 @@ app.post('/api/webhook', async (req, res) => {
 });
 
 // Main logic handler
-async function handleMessage(msg: TelegramBot.Message) {
+async function handleMessage(msg: TelegramBot.Message, host?: string) {
   if (!bot) return;
   const chatId = msg.chat.id;
   const text = msg.text || msg.caption || '';
-  let userImageBase64 = '';
+  let userImageFileId = '';
+  
+  const baseUrl = host ? `https://${host}` : 'https://telegram-bot-nine-delta.vercel.app';
 
   if (msg.photo && msg.photo.length > 0) {
-    try {
-      const fileId = msg.photo[msg.photo.length - 1].file_id;
-      const fileLink = await bot.getFileLink(fileId);
-      const response = await fetch(fileLink);
-      const arrayBuffer = await response.arrayBuffer();
-      userImageBase64 = Buffer.from(arrayBuffer).toString('base64');
-    } catch (err) {
-      console.error("Failed to download user photo:", err);
-    }
+    userImageFileId = msg.photo[msg.photo.length - 1].file_id;
   }
 
-  if (!text && !userImageBase64) return;
+  if (!text && !userImageFileId) return;
 
   bot.sendChatAction(chatId, 'typing').catch(() => {});
 
   const config = await getStore('bot_config', DEFAULT_CONFIG);
   
-  if (userImageBase64) {
-    await setStore(`user_face_${chatId}`, userImageBase64);
+  if (userImageFileId) {
+    await setStore(`user_face_fileid_${chatId}`, userImageFileId);
+    // Clear old base64 data to free up Redis space immediately
+    await setStore(`user_face_${chatId}`, '');
   }
 
   let historyText = text;
-  if (userImageBase64 && !text) {
-    historyText = "[男朋友发送了一张照片，并希望你以后发自拍时参考这张脸]";
-  } else if (userImageBase64) {
-    historyText = text + "\n[男朋友附带发送了一张照片，并希望你以后发自拍时参考这张脸]";
+  if (userImageFileId && !text) {
+    historyText = `[男朋友发送了一张照片，并希望你以后发自拍时参考这张脸。照片查看链接: ${baseUrl}/api/file/${userImageFileId} ]`;
+  } else if (userImageFileId) {
+    historyText = text + `\n[男朋友附带发送了一张照片，并希望你以后发自拍时参考这张脸。照片查看链接: ${baseUrl}/api/file/${userImageFileId} ]`;
   }
 
   let history = await getStore<{role: string, parts: {text: string}[]}[]>(`history_${chatId}`, []);
@@ -421,8 +428,9 @@ async function handleMessage(msg: TelegramBot.Message) {
       botText = botText.replace(videoMatch[0], '').trim();
     }
 
-    // Save history
-    await setStore(`history_${chatId}`, [...newHistory, { role: 'model', parts: [{ text: botTextFull }] }]);
+    // Save history initially
+    let currentHistory = [...newHistory, { role: 'model', parts: [{ text: botTextFull }] }];
+    await setStore(`history_${chatId}`, currentHistory);
 
     if (botText) {
       await bot.sendMessage(chatId, botText);
@@ -431,7 +439,20 @@ async function handleMessage(msg: TelegramBot.Message) {
     if (photoPrompt) {
       bot.sendChatAction(chatId, 'upload_photo').catch(() => {});
       try {
-        const faceBase64 = await getStore<string>(`user_face_${chatId}`, '');
+        let faceBase64 = await getStore<string>(`user_face_${chatId}`, '');
+        const faceFileId = await getStore<string>(`user_face_fileid_${chatId}`, '');
+        
+        if (faceFileId) {
+          try {
+            const fileLink = await bot.getFileLink(faceFileId);
+            const response = await fetchWithRetry(() => fetch(fileLink));
+            const arrayBuffer = await response.arrayBuffer();
+            faceBase64 = Buffer.from(arrayBuffer).toString('base64');
+          } catch (err) {
+            console.error("Failed to download face from telegram:", err);
+          }
+        }
+
         const imageParts: any[] = [];
         
         if (faceBase64) {
@@ -458,7 +479,13 @@ async function handleMessage(msg: TelegramBot.Message) {
         }
         
         if (foundImage) {
-          await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+          const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+          if (sentMsg.photo && sentMsg.photo.length > 0) {
+            const sentFileId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
+            botTextFull += `\n[系统记录：照片已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
+            currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
+            await setStore(`history_${chatId}`, currentHistory);
+          }
         } else {
           if (faceBase64) {
             const fallbackResponse = await fetchWithRetry(() => ai.models.generateContent({
@@ -474,7 +501,13 @@ async function handleMessage(msg: TelegramBot.Message) {
               }
             }
             if (foundImage) {
-              await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+              const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+              if (sentMsg.photo && sentMsg.photo.length > 0) {
+                const sentFileId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
+                botTextFull += `\n[系统记录：照片已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
+                currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
+                await setStore(`history_${chatId}`, currentHistory);
+              }
             } else {
               await bot.sendMessage(chatId, "(呜呜，这张照片触发了系统的安全拦截，没发出去🥺)");
             }
@@ -514,7 +547,13 @@ async function handleMessage(msg: TelegramBot.Message) {
               headers: { 'x-goog-api-key': apiKey }
             }));
             const arrayBuffer = await response.arrayBuffer();
-            await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
+            const sentMsg = await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
+            if (sentMsg.video) {
+              const sentFileId = sentMsg.video.file_id;
+              botTextFull += `\n[系统记录：视频已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
+              currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
+              await setStore(`history_${chatId}`, currentHistory);
+            }
           }
         } catch (vidErr: any) {
           console.error("Video error:", vidErr);

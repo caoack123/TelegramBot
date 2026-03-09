@@ -341,6 +341,12 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
   if (!text && !userImageFileId) return;
 
+  if (text === '/clear') {
+    await setStore(`history_${chatId}`, []);
+    await bot.sendMessage(chatId, "记忆已清空，我们重新开始聊天吧！✨");
+    return;
+  }
+
   bot.sendChatAction(chatId, 'typing').catch(() => {});
 
   const config = await getStore('bot_config', DEFAULT_CONFIG);
@@ -411,11 +417,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
       const orMessages: {role: string, content: string}[] = [];
       if (activeSystemPrompt) {
-        if (normalizedMessages.length > 0) {
-          normalizedMessages[0].content = activeSystemPrompt + '\n\n' + normalizedMessages[0].content;
-        } else {
-          normalizedMessages.push({ role: 'user', content: activeSystemPrompt });
-        }
+        orMessages.push({ role: "system", content: activeSystemPrompt });
       }
       orMessages.push(...normalizedMessages);
       
@@ -523,10 +525,8 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
         if (foundImage) {
           const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
           if (sentMsg.photo && sentMsg.photo.length > 0) {
-            const sentFileId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
-            botTextFull += `\n[系统记录：照片已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
-            currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
-            await setStore(`history_${chatId}`, currentHistory);
+            // Photo sent successfully, no need to append system record to history
+            // as it causes the model to hallucinate system records in future turns.
           }
         } else {
           if (faceBase64) {
@@ -545,10 +545,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
             if (foundImage) {
               const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
               if (sentMsg.photo && sentMsg.photo.length > 0) {
-                const sentFileId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
-                botTextFull += `\n[系统记录：照片已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
-                currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
-                await setStore(`history_${chatId}`, currentHistory);
+                // Photo sent successfully
               }
             } else {
               await bot.sendMessage(chatId, "(呜呜，这张照片触发了系统的安全拦截，没发出去🥺)");
@@ -591,10 +588,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
             const arrayBuffer = await response.arrayBuffer();
             const sentMsg = await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
             if (sentMsg.video) {
-              const sentFileId = sentMsg.video.file_id;
-              botTextFull += `\n[系统记录：视频已发送。后端查看链接: ${baseUrl}/api/file/${sentFileId} ]`;
-              currentHistory[currentHistory.length - 1].parts[0].text = botTextFull;
-              await setStore(`history_${chatId}`, currentHistory);
+              // Video sent successfully
             }
           }
         } catch (vidErr: any) {

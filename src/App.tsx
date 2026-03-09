@@ -259,7 +259,7 @@ export default function App() {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-green-600 font-medium">
                         <CheckCircle className="w-5 h-5" />
-                        Vercel KV 已连接
+                        Upstash Redis 已连接
                       </div>
                       <button onClick={() => { setActiveTab('store'); fetchStoreData(); }} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
                         <Database className="w-4 h-4" /> 查看数据
@@ -277,7 +277,7 @@ export default function App() {
                         </button>
                       </div>
                       <div className="text-xs text-gray-500 mt-1">
-                        提示: 如果你在 Vercel 创建了 KV 数据库但这里仍显示内存，请确保在 Vercel 后台点击了 <strong>Redeploy</strong> (重新部署)，以使 KV_REST_API_URL 环境变量生效。
+                        提示: 如果你在 Vercel 创建了 Redis 数据库但这里仍显示内存，请确保在 Vercel 后台点击了 <strong>Redeploy</strong> (重新部署)，以使 UPSTASH_REDIS_REST_URL 环境变量生效。
                       </div>
                     </div>
                   )}
@@ -394,7 +394,7 @@ export default function App() {
 
           <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm leading-relaxed">
             <strong>🎉 架构已升级：</strong><br/>
-            现在 AI 大脑已经完全迁移到后端！你<strong>不再需要保持这个页面打开</strong>，Bot 也能随时回复你。配置保存在后端，支持 Vercel KV 持久化存储。
+            现在 AI 大脑已经完全迁移到后端！你<strong>不再需要保持这个页面打开</strong>，Bot 也能随时回复你。配置保存在后端，支持 Upstash Redis 持久化存储。
           </div>
           </>
           ) : (

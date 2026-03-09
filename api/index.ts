@@ -1,7 +1,7 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
@@ -9,16 +9,20 @@ dotenv.config();
 const PORT = 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-// Fallback in-memory store if Vercel KV is not configured
+const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+const redis = (redisUrl && redisToken) ? new Redis({ url: redisUrl, token: redisToken }) : null;
+
+// Fallback in-memory store if Redis is not configured
 const memoryStore = new Map<string, any>();
 
 async function getStore<T>(key: string, defaultValue: T): Promise<T> {
-  if (process.env.KV_REST_API_URL) {
+  if (redis) {
     try {
-      const val = await kv.get<T>(key);
+      const val = await redis.get<T>(key);
       return val !== null ? val : defaultValue;
     } catch (e) {
-      console.error("KV get error:", e);
+      console.error("Redis get error:", e);
       return defaultValue;
     }
   }
@@ -26,11 +30,11 @@ async function getStore<T>(key: string, defaultValue: T): Promise<T> {
 }
 
 async function setStore(key: string, value: any): Promise<void> {
-  if (process.env.KV_REST_API_URL) {
+  if (redis) {
     try {
-      await kv.set(key, value);
+      await redis.set(key, value);
     } catch (e) {
-      console.error("KV set error:", e);
+      console.error("Redis set error:", e);
     }
   } else {
     memoryStore.set(key, value);
@@ -99,26 +103,26 @@ if (TELEGRAM_TOKEN) {
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...config, hasKv: !!process.env.KV_REST_API_URL });
+  res.json({ ...config, hasKv: !!redis });
 });
 
 // API to view current store data
 app.get('/api/store', async (req, res) => {
   try {
-    if (process.env.KV_REST_API_URL) {
-      // Fetch all keys from Vercel KV
-      const keys = await kv.keys('*');
+    if (redis) {
+      // Fetch all keys from Redis
+      const keys = await redis.keys('*');
       const data: Record<string, any> = {};
       
       if (keys.length > 0) {
         // Fetch values for all keys
         for (const key of keys) {
-          data[key] = await kv.get(key);
+          data[key] = await redis.get(key);
         }
       }
       
       res.json({
-        type: 'Vercel KV',
+        type: 'Upstash Redis',
         data: data
       });
     } else {

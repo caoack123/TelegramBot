@@ -29,6 +29,7 @@ export default function App() {
   const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
   const [videoModel, setVideoModel] = useState('veo-3.1-fast-generate-preview');
   const [enableVideo, setEnableVideo] = useState(false);
+  const [maxHistoryLength, setMaxHistoryLength] = useState(20);
   const [systemPrompt, setSystemPrompt] = useState('');
 
   useEffect(() => {
@@ -57,6 +58,7 @@ export default function App() {
         setImageModel(data.imageModel);
         setVideoModel(data.videoModel);
         setEnableVideo(data.enableVideo ?? false);
+        setMaxHistoryLength(data.maxHistoryLength ?? 20);
         setSystemPrompt(data.systemPrompt);
         setHasKv(data.hasKv);
       });
@@ -76,6 +78,7 @@ export default function App() {
           imageModel,
           videoModel,
           enableVideo,
+          maxHistoryLength,
           systemPrompt
         })
       });
@@ -392,6 +395,29 @@ export default function App() {
                     <option value="veo-3.1-generate-preview">Veo 3.1 (高质量)</option>
                   </select>
                 </div>
+              </div>
+            </div>
+
+            {/* Context Settings */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 className="text-md font-medium text-gray-800 mb-3">上下文记忆配置</h3>
+              <div>
+                <label className="flex justify-between text-sm font-medium text-gray-700 mb-2">
+                  <span>保留历史消息条数 (1个回合 = 1条User + 1条AI)</span>
+                  <span className="text-blue-600 font-bold">{maxHistoryLength} 条</span>
+                </label>
+                <input 
+                  type="range" 
+                  min="2" 
+                  max="100" 
+                  step="2"
+                  value={maxHistoryLength} 
+                  onChange={e => setMaxHistoryLength(parseInt(e.target.value))} 
+                  className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                />
+                <p className="text-xs text-gray-500 mt-2">
+                  提示：条数越多，机器人记得越久，但消耗的 Token 也越多。建议保持在 20-40 条左右。
+                </p>
               </div>
             </div>
 

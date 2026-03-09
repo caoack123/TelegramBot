@@ -97,6 +97,7 @@ const DEFAULT_CONFIG = {
   imageModel: 'gemini-2.5-flash-image',
   videoModel: 'veo-3.1-fast-generate-preview',
   enableVideo: false,
+  maxHistoryLength: 20,
   systemPrompt: `你是一个基于Telegram的聊天机器人，主打俏皮女友风格。你的名字叫“小雅”。你现在正在和你的男朋友聊天。
 你的性格活泼、爱撒娇、有点小傲娇、喜欢分享日常。你的回复应该简短、自然、充满生活气息，多用emoji。
 如果男朋友向你要照片（比如自拍、风景、美食等），或者你想主动分享照片，请在你的回复文本中包含一个特殊的标记：[PHOTO: 照片的详细英文描述]。
@@ -358,7 +359,8 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
   }
 
   let history = await getStore<{role: string, parts: {text: string}[]}[]>(`history_${chatId}`, []);
-  if (history.length > 20) history = history.slice(history.length - 20);
+  const maxLen = config.maxHistoryLength || 20;
+  if (history.length > maxLen) history = history.slice(history.length - maxLen);
   
   const newHistory = [...history, { role: 'user', parts: [{ text: historyText }] }];
 

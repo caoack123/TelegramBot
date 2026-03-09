@@ -93,10 +93,21 @@ const DEFAULT_CONFIG = {
   textProvider: 'gemini',
   openRouterApiKey: '',
   openRouterModel: 'anthropic/claude-3-haiku',
+  customTextEndpoint: 'https://api.venice.ai/api/v1/chat/completions',
+  customTextApiKey: '',
+  customTextModel: 'venice-uncensored',
   textModel: 'gemini-3-flash-preview',
+  imageProvider: 'gemini',
   imageModel: 'gemini-2.5-flash-image',
+  customImageEndpoint: 'https://api.venice.ai/api/v1/image/generate',
+  customImageApiKey: '',
+  customImageModel: 'fluently-xl',
+  videoProvider: 'gemini',
   videoModel: 'veo-3.1-fast-generate-preview',
   enableVideo: false,
+  customVideoEndpoint: '',
+  customVideoApiKey: '',
+  customVideoModel: '',
   maxHistoryLength: 20,
   systemPrompt: `你是一个基于Telegram的聊天机器人，主打俏皮女友风格。你的名字叫“小雅”。你现在正在和你的男朋友聊天。
 你的性格活泼、爱撒娇、有点小傲娇、喜欢分享日常。你的回复应该简短、自然、充满生活气息，多用emoji。
@@ -390,8 +401,13 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     const ai = new GoogleGenAI({ apiKey });
     let botTextFull = '';
 
-    if (config.textProvider === 'openrouter') {
-      if (!config.openRouterApiKey) throw new Error("请先配置 OpenRouter API Key");
+    if (config.textProvider === 'openrouter' || config.textProvider === 'custom') {
+      const isCustom = config.textProvider === 'custom';
+      const apiKey = isCustom ? config.customTextApiKey : config.openRouterApiKey;
+      const model = isCustom ? config.customTextModel : config.openRouterModel;
+      const endpoint = isCustom ? config.customTextEndpoint : "https://openrouter.ai/api/v1/chat/completions";
+
+      if (!apiKey) throw new Error(`请先配置 ${isCustom ? 'Custom' : 'OpenRouter'} API Key`);
       
       // Normalize messages for strict providers like Anthropic
       const normalizedMessages: {role: string, content: string}[] = [];
@@ -421,16 +437,20 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       }
       orMessages.push(...normalizedMessages);
       
-      const res = await fetchWithRetry(() => fetch("https://openrouter.ai/api/v1/chat/completions", {
+      const headers: any = {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      };
+      if (!isCustom) {
+        headers["HTTP-Referer"] = baseUrl;
+        headers["X-Title"] = "Telegram Bot";
+      }
+
+      const res = await fetchWithRetry(() => fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${config.openRouterApiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": baseUrl,
-          "X-Title": "Telegram Bot"
-        },
+        headers,
         body: JSON.stringify({
-          model: config.openRouterModel,
+          model: model,
           messages: orMessages,
           temperature: 0.7
         })
@@ -440,7 +460,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
         const errData = await res.json().catch(() => ({}));
         const rawError = errData.error?.metadata?.raw || errData.error?.metadata || '';
         const rawErrorStr = typeof rawError === 'object' ? JSON.stringify(rawError) : rawError;
-        throw new Error(`OpenRouter Error: ${errData.error?.message || res.statusText}${rawErrorStr ? ` | Raw: ${rawErrorStr}` : ''}`);
+        throw new Error(`${isCustom ? 'Custom API' : 'OpenRouter'} Error: ${errData.error?.message || res.statusText}${rawErrorStr ? ` | Raw: ${rawErrorStr}` : ''}`);
       }
       const data = await res.json();
       botTextFull = data.choices?.[0]?.message?.content || '';
@@ -506,52 +526,90 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           imageParts.push({ text: photoPrompt });
         }
 
-        const imageResponse = await fetchWithRetry(() => ai.models.generateContent({
-          model: config.imageModel,
-          contents: { parts: imageParts },
-          config: { imageConfig: { aspectRatio: "3:4" } }
-        }));
-        
-        let foundImage = false;
-        let imageBase64 = '';
-        for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
-          if (part.inlineData) {
-            imageBase64 = part.inlineData.data;
-            foundImage = true;
-            break;
+        if (config.imageProvider === 'custom') {
+          if (!config.customImageApiKey || !config.customImageEndpoint) {
+            throw new Error("Custom Image API not configured");
           }
-        }
-        
-        if (foundImage) {
-          const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
-          if (sentMsg.photo && sentMsg.photo.length > 0) {
-            // Photo sent successfully, no need to append system record to history
-            // as it causes the model to hallucinate system records in future turns.
+          const res = await fetchWithRetry(() => fetch(config.customImageEndpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${config.customImageApiKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: config.customImageModel,
+              prompt: photoPrompt,
+              return_binary: false,
+              response_format: "b64_json"
+            })
+          }));
+          
+          if (!res.ok) {
+            const errData = await res.json().catch(()=>({}));
+            throw new Error(`Custom Image API Error: ${JSON.stringify(errData)}`);
+          }
+          
+          const data = await res.json();
+          let imageBase64 = data.data?.[0]?.b64_json || data.images?.[0] || '';
+          let imageUrl = data.data?.[0]?.url || data.url || '';
+          
+          if (imageBase64) {
+            await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+          } else if (imageUrl) {
+            const imgRes = await fetchWithRetry(() => fetch(imageUrl));
+            const imgBuf = await imgRes.arrayBuffer();
+            await bot.sendPhoto(chatId, Buffer.from(imgBuf));
+          } else {
+            throw new Error("No image returned from custom API");
           }
         } else {
-          if (faceBase64) {
-            const fallbackResponse = await fetchWithRetry(() => ai.models.generateContent({
-              model: config.imageModel,
-              contents: { parts: [{ text: photoPrompt }] },
-              config: { imageConfig: { aspectRatio: "3:4" } }
-            }));
-            for (const part of fallbackResponse.candidates?.[0]?.content?.parts || []) {
-              if (part.inlineData) {
-                imageBase64 = part.inlineData.data;
-                foundImage = true;
-                break;
-              }
+          const imageResponse = await fetchWithRetry(() => ai.models.generateContent({
+            model: config.imageModel,
+            contents: { parts: imageParts },
+            config: { imageConfig: { aspectRatio: "3:4" } }
+          }));
+          
+          let foundImage = false;
+          let imageBase64 = '';
+          for (const part of imageResponse.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+              imageBase64 = part.inlineData.data;
+              foundImage = true;
+              break;
             }
-            if (foundImage) {
-              const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
-              if (sentMsg.photo && sentMsg.photo.length > 0) {
-                // Photo sent successfully
+          }
+          
+          if (foundImage) {
+            const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+            if (sentMsg.photo && sentMsg.photo.length > 0) {
+              // Photo sent successfully, no need to append system record to history
+              // as it causes the model to hallucinate system records in future turns.
+            }
+          } else {
+            if (faceBase64) {
+              const fallbackResponse = await fetchWithRetry(() => ai.models.generateContent({
+                model: config.imageModel,
+                contents: { parts: [{ text: photoPrompt }] },
+                config: { imageConfig: { aspectRatio: "3:4" } }
+              }));
+              for (const part of fallbackResponse.candidates?.[0]?.content?.parts || []) {
+                if (part.inlineData) {
+                  imageBase64 = part.inlineData.data;
+                  foundImage = true;
+                  break;
+                }
+              }
+              if (foundImage) {
+                const sentMsg = await bot.sendPhoto(chatId, Buffer.from(imageBase64, 'base64'));
+                if (sentMsg.photo && sentMsg.photo.length > 0) {
+                  // Photo sent successfully
+                }
+              } else {
+                await bot.sendMessage(chatId, "(呜呜，这张照片触发了系统的安全拦截，没发出去🥺)");
               }
             } else {
               await bot.sendMessage(chatId, "(呜呜，这张照片触发了系统的安全拦截，没发出去🥺)");
             }
-          } else {
-            await bot.sendMessage(chatId, "(呜呜，这张照片触发了系统的安全拦截，没发出去🥺)");
           }
         }
       } catch (imgErr: any) {
@@ -571,24 +629,60 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       } else {
         bot.sendChatAction(chatId, 'record_video').catch(() => {});
         try {
-          let operation = await fetchWithRetry(() => ai.models.generateVideos({
-            model: config.videoModel,
-            prompt: videoPrompt,
-            config: { numberOfVideos: 1, aspectRatio: '9:16', resolution: '720p' }
-          }));
-          while (!operation.done) {
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            operation = await fetchWithRetry(() => ai.operations.getVideosOperation({operation: operation}));
-          }
-          const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-          if (downloadLink) {
-            const response = await fetchWithRetry(() => fetch(downloadLink, {
-              headers: { 'x-goog-api-key': apiKey }
+          if (config.videoProvider === 'custom') {
+            if (!config.customVideoApiKey || !config.customVideoEndpoint) {
+              throw new Error("Custom Video API not configured");
+            }
+            const res = await fetchWithRetry(() => fetch(config.customVideoEndpoint, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${config.customVideoApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                model: config.customVideoModel,
+                prompt: videoPrompt
+              })
             }));
-            const arrayBuffer = await response.arrayBuffer();
-            const sentMsg = await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
-            if (sentMsg.video) {
-              // Video sent successfully
+            
+            if (!res.ok) {
+              const errData = await res.json().catch(()=>({}));
+              throw new Error(`Custom Video API Error: ${JSON.stringify(errData)}`);
+            }
+            
+            const data = await res.json();
+            let vidUrl = data.data?.[0]?.url || data.video_url || data.url || '';
+            
+            if (vidUrl) {
+              const vidRes = await fetchWithRetry(() => fetch(vidUrl));
+              const vidBuf = await vidRes.arrayBuffer();
+              const sentMsg = await bot.sendVideo(chatId, Buffer.from(vidBuf));
+              if (sentMsg.video) {
+                // Video sent successfully
+              }
+            } else {
+              throw new Error("No video returned from custom API");
+            }
+          } else {
+            let operation = await fetchWithRetry(() => ai.models.generateVideos({
+              model: config.videoModel,
+              prompt: videoPrompt,
+              config: { numberOfVideos: 1, aspectRatio: '9:16', resolution: '720p' }
+            }));
+            while (!operation.done) {
+              await new Promise(resolve => setTimeout(resolve, 10000));
+              operation = await fetchWithRetry(() => ai.operations.getVideosOperation({operation: operation}));
+            }
+            const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+            if (downloadLink) {
+              const response = await fetchWithRetry(() => fetch(downloadLink, {
+                headers: { 'x-goog-api-key': apiKey }
+              }));
+              const arrayBuffer = await response.arrayBuffer();
+              const sentMsg = await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
+              if (sentMsg.video) {
+                // Video sent successfully
+              }
             }
           }
         } catch (vidErr: any) {

@@ -22,12 +22,26 @@ export default function App() {
   const [loadingStore, setLoadingStore] = useState(false);
   
   // Models and Prompt State
-  const [textProvider, setTextProvider] = useState<'gemini' | 'openrouter'>('gemini');
+  const [textProvider, setTextProvider] = useState<'gemini' | 'openrouter' | 'custom'>('gemini');
   const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   const [openRouterModel, setOpenRouterModel] = useState('anthropic/claude-3-haiku');
+  const [customTextEndpoint, setCustomTextEndpoint] = useState('https://api.venice.ai/api/v1/chat/completions');
+  const [customTextApiKey, setCustomTextApiKey] = useState('');
+  const [customTextModel, setCustomTextModel] = useState('venice-uncensored');
   const [textModel, setTextModel] = useState('gemini-3-flash-preview');
+  
+  const [imageProvider, setImageProvider] = useState<'gemini' | 'custom'>('gemini');
   const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
+  const [customImageEndpoint, setCustomImageEndpoint] = useState('https://api.venice.ai/api/v1/image/generate');
+  const [customImageApiKey, setCustomImageApiKey] = useState('');
+  const [customImageModel, setCustomImageModel] = useState('fluently-xl');
+
+  const [videoProvider, setVideoProvider] = useState<'gemini' | 'custom'>('gemini');
   const [videoModel, setVideoModel] = useState('veo-3.1-fast-generate-preview');
+  const [customVideoEndpoint, setCustomVideoEndpoint] = useState('');
+  const [customVideoApiKey, setCustomVideoApiKey] = useState('');
+  const [customVideoModel, setCustomVideoModel] = useState('');
+  
   const [enableVideo, setEnableVideo] = useState(false);
   const [maxHistoryLength, setMaxHistoryLength] = useState(20);
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -54,9 +68,22 @@ export default function App() {
         setTextProvider(data.textProvider);
         setOpenRouterApiKey(data.openRouterApiKey);
         setOpenRouterModel(data.openRouterModel);
+        setCustomTextEndpoint(data.customTextEndpoint || 'https://api.venice.ai/api/v1/chat/completions');
+        setCustomTextApiKey(data.customTextApiKey || '');
+        setCustomTextModel(data.customTextModel || 'venice-uncensored');
         setTextModel(data.textModel);
+        setImageProvider(data.imageProvider || 'gemini');
         setImageModel(data.imageModel);
+        setCustomImageEndpoint(data.customImageEndpoint || 'https://api.venice.ai/api/v1/image/generate');
+        setCustomImageApiKey(data.customImageApiKey || '');
+        setCustomImageModel(data.customImageModel || 'fluently-xl');
+        
+        setVideoProvider(data.videoProvider || 'gemini');
         setVideoModel(data.videoModel);
+        setCustomVideoEndpoint(data.customVideoEndpoint || '');
+        setCustomVideoApiKey(data.customVideoApiKey || '');
+        setCustomVideoModel(data.customVideoModel || '');
+        
         setEnableVideo(data.enableVideo ?? false);
         setMaxHistoryLength(data.maxHistoryLength ?? 20);
         setSystemPrompt(data.systemPrompt);
@@ -74,9 +101,20 @@ export default function App() {
           textProvider,
           openRouterApiKey,
           openRouterModel,
+          customTextEndpoint,
+          customTextApiKey,
+          customTextModel,
           textModel,
+          imageProvider,
           imageModel,
+          customImageEndpoint,
+          customImageApiKey,
+          customImageModel,
+          videoProvider,
           videoModel,
+          customVideoEndpoint,
+          customVideoApiKey,
+          customVideoModel,
           enableVideo,
           maxHistoryLength,
           systemPrompt
@@ -341,6 +379,7 @@ export default function App() {
                   <select value={textProvider} onChange={e => setTextProvider(e.target.value as any)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
                     <option value="gemini">Google Gemini (内置)</option>
                     <option value="openrouter">OpenRouter (第三方)</option>
+                    <option value="custom">自定义 API (如 Venice AI)</option>
                   </select>
                 </div>
                 
@@ -353,7 +392,7 @@ export default function App() {
                       <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite (更快)</option>
                     </select>
                   </div>
-                ) : (
+                ) : textProvider === 'openrouter' ? (
                   <>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">OpenRouter 模型名称</label>
@@ -364,6 +403,21 @@ export default function App() {
                       <input type="password" value={openRouterApiKey} onChange={e => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-v1-..." className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                     </div>
                   </>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 bg-white p-3 rounded border border-gray-200 md:col-span-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">API Endpoint URL</label>
+                      <input type="text" value={customTextEndpoint} onChange={e => setCustomTextEndpoint(e.target.value)} placeholder="https://api.venice.ai/api/v1/chat/completions" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
+                      <input type="password" value={customTextApiKey} onChange={e => setCustomTextApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>
+                      <input type="text" value={customTextModel} onChange={e => setCustomTextModel(e.target.value)} placeholder="venice-uncensored" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
@@ -371,7 +425,7 @@ export default function App() {
             {/* Media Model Settings */}
             <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-md font-medium text-gray-800">多媒体生成模型 (仅支持 Gemini/Veo)</h3>
+                <h3 className="text-md font-medium text-gray-800">多媒体生成模型</h3>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <span className="text-sm text-gray-600 font-medium">允许生成视频</span>
                   <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
@@ -380,22 +434,76 @@ export default function App() {
                   </div>
                 </label>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">图片模型</label>
-                  <select value={imageModel} onChange={e => setImageModel(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
-                    <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (推荐)</option>
-                    <option value="gemini-3.1-flash-image-preview">Gemini 3.1 Flash Image (高质量)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">视频模型</label>
-                  <select value={videoModel} onChange={e => setVideoModel(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
-                    <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast (推荐)</option>
-                    <option value="veo-3.1-generate-preview">Veo 3.1 (高质量)</option>
-                  </select>
-                </div>
+
+              {/* Image Settings */}
+              <div className="mb-4 border-b border-gray-200 pb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">图片生成提供商</label>
+                <select value={imageProvider} onChange={e => setImageProvider(e.target.value as any)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none mb-3">
+                  <option value="gemini">Google Gemini (内置, 支持参考人脸)</option>
+                  <option value="custom">自定义 API (如 Venice AI)</option>
+                </select>
+
+                {imageProvider === 'gemini' ? (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">图片模型</label>
+                    <select value={imageModel} onChange={e => setImageModel(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                      <option value="gemini-2.5-flash-image">Gemini 2.5 Flash Image (推荐)</option>
+                      <option value="gemini-3.1-flash-image-preview">Gemini 3.1 Flash Image (高质量)</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 bg-white p-3 rounded border border-gray-200">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">API Endpoint URL</label>
+                      <input type="text" value={customImageEndpoint} onChange={e => setCustomImageEndpoint(e.target.value)} placeholder="https://api.venice.ai/api/v1/image/generate" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
+                      <input type="password" value={customImageApiKey} onChange={e => setCustomImageApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>
+                      <input type="text" value={customImageModel} onChange={e => setCustomImageModel(e.target.value)} placeholder="fluently-xl" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Video Settings */}
+              {enableVideo && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">视频生成提供商</label>
+                  <select value={videoProvider} onChange={e => setVideoProvider(e.target.value as any)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none mb-3">
+                    <option value="gemini">Google Veo (内置)</option>
+                    <option value="custom">自定义 API</option>
+                  </select>
+
+                  {videoProvider === 'gemini' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">视频模型</label>
+                      <select value={videoModel} onChange={e => setVideoModel(e.target.value)} className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                        <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast (推荐)</option>
+                        <option value="veo-3.1-generate-preview">Veo 3.1 (高质量)</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 bg-white p-3 rounded border border-gray-200">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">API Endpoint URL</label>
+                        <input type="text" value={customVideoEndpoint} onChange={e => setCustomVideoEndpoint(e.target.value)} placeholder="https://api.example.com/v1/video/generate" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
+                        <input type="password" value={customVideoApiKey} onChange={e => setCustomVideoApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>
+                        <input type="text" value={customVideoModel} onChange={e => setCustomVideoModel(e.target.value)} placeholder="video-model-name" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Context Settings */}

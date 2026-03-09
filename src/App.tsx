@@ -28,6 +28,7 @@ export default function App() {
   const [textModel, setTextModel] = useState('gemini-3-flash-preview');
   const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
   const [videoModel, setVideoModel] = useState('veo-3.1-fast-generate-preview');
+  const [enableVideo, setEnableVideo] = useState(true);
   const [systemPrompt, setSystemPrompt] = useState('');
 
   useEffect(() => {
@@ -55,6 +56,7 @@ export default function App() {
         setTextModel(data.textModel);
         setImageModel(data.imageModel);
         setVideoModel(data.videoModel);
+        setEnableVideo(data.enableVideo ?? true);
         setSystemPrompt(data.systemPrompt);
         setHasKv(data.hasKv);
       });
@@ -73,6 +75,7 @@ export default function App() {
           textModel,
           imageModel,
           videoModel,
+          enableVideo,
           systemPrompt
         })
       });
@@ -263,14 +266,19 @@ export default function App() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-amber-600 font-medium">
-                        <AlertCircle className="w-5 h-5" />
-                        使用内存 (重启会丢失)
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-amber-600 font-medium">
+                          <AlertCircle className="w-5 h-5" />
+                          使用内存 (重启会丢失)
+                        </div>
+                        <button onClick={() => { setActiveTab('store'); fetchStoreData(); }} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                          <Database className="w-4 h-4" /> 查看数据
+                        </button>
                       </div>
-                      <button onClick={() => { setActiveTab('store'); fetchStoreData(); }} className="text-sm text-blue-600 hover:underline flex items-center gap-1">
-                        <Database className="w-4 h-4" /> 查看数据
-                      </button>
+                      <div className="text-xs text-gray-500 mt-1">
+                        提示: 如果你在 Vercel 创建了 KV 数据库但这里仍显示内存，请确保在 Vercel 后台点击了 <strong>Redeploy</strong> (重新部署)，以使 KV_REST_API_URL 环境变量生效。
+                      </div>
                     </div>
                   )}
                 </div>
@@ -337,7 +345,16 @@ export default function App() {
 
             {/* Media Model Settings */}
             <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="text-md font-medium text-gray-800 mb-3">多媒体生成模型 (仅支持 Gemini/Veo)</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-md font-medium text-gray-800">多媒体生成模型 (仅支持 Gemini/Veo)</h3>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="text-sm text-gray-600 font-medium">允许生成视频</span>
+                  <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                    <input type="checkbox" checked={enableVideo} onChange={e => setEnableVideo(e.target.checked)} className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-transform duration-200 ease-in-out" style={{ transform: enableVideo ? 'translateX(100%)' : 'translateX(0)', borderColor: enableVideo ? '#3B82F6' : '#D1D5DB' }}/>
+                    <div className={`toggle-label block overflow-hidden h-5 rounded-full cursor-pointer transition-colors duration-200 ease-in-out ${enableVideo ? 'bg-blue-500' : 'bg-gray-300'}`}></div>
+                  </div>
+                </label>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">图片模型</label>

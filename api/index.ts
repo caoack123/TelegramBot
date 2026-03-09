@@ -44,6 +44,7 @@ const DEFAULT_CONFIG = {
   textModel: 'gemini-3-flash-preview',
   imageModel: 'gemini-2.5-flash-image',
   videoModel: 'veo-3.1-fast-generate-preview',
+  enableVideo: true,
   systemPrompt: `你是一个基于Telegram的聊天机器人，主打俏皮女友风格。你的名字叫“小雅”。你现在正在和你的男朋友聊天。
 你的性格活泼、爱撒娇、有点小傲娇、喜欢分享日常。你的回复应该简短、自然、充满生活气息，多用emoji。
 如果男朋友向你要照片（比如自拍、风景、美食等），或者你想主动分享照片，请在你的回复文本中包含一个特殊的标记：[PHOTO: 照片的详细英文描述]。
@@ -278,13 +279,18 @@ async function handleMessage(msg: TelegramBot.Message) {
     // Debug log to help identify key issues (only logs prefix and length, safe for production)
     console.log(`[Debug] Using API Key starting with: ${apiKey.substring(0, 4)}..., Length: ${apiKey.length}`);
     
+    let activeSystemPrompt = config.systemPrompt;
+    if (config.enableVideo === false) {
+      activeSystemPrompt += "\n\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
+    }
+
     const ai = new GoogleGenAI({ apiKey });
     let botTextFull = '';
 
     if (config.textProvider === 'openrouter') {
       if (!config.openRouterApiKey) throw new Error("请先配置 OpenRouter API Key");
       const orMessages = [
-        { role: "system", content: config.systemPrompt },
+        { role: "system", content: activeSystemPrompt },
         ...newHistory.map(m => ({
           role: m.role === 'model' ? 'assistant' : 'user',
           content: m.parts[0].text
@@ -315,7 +321,7 @@ async function handleMessage(msg: TelegramBot.Message) {
         model: config.textModel,
         contents: newHistory as any,
         config: {
-          systemInstruction: config.systemPrompt,
+          systemInstruction: activeSystemPrompt,
           temperature: 0.7,
         }
       }));
@@ -410,31 +416,36 @@ async function handleMessage(msg: TelegramBot.Message) {
     }
 
     if (videoPrompt) {
-      bot.sendChatAction(chatId, 'record_video').catch(() => {});
-      try {
-        let operation = await fetchWithRetry(() => ai.models.generateVideos({
-          model: config.videoModel,
-          prompt: videoPrompt,
-          config: { numberOfVideos: 1, aspectRatio: '9:16', resolution: '720p' }
-        }));
-        while (!operation.done) {
-          await new Promise(resolve => setTimeout(resolve, 10000));
-          operation = await fetchWithRetry(() => ai.operations.getVideosOperation({operation: operation}));
-        }
-        const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-        if (downloadLink) {
-          const response = await fetchWithRetry(() => fetch(downloadLink, {
-            headers: { 'x-goog-api-key': apiKey }
+      if (config.enableVideo === false) {
+        // Just in case the model still outputs the tag, we ignore it and let the user know
+        await bot.sendMessage(chatId, "(视频功能已关闭，脑补一下吧~)");
+      } else {
+        bot.sendChatAction(chatId, 'record_video').catch(() => {});
+        try {
+          let operation = await fetchWithRetry(() => ai.models.generateVideos({
+            model: config.videoModel,
+            prompt: videoPrompt,
+            config: { numberOfVideos: 1, aspectRatio: '9:16', resolution: '720p' }
           }));
-          const arrayBuffer = await response.arrayBuffer();
-          await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
-        }
-      } catch (vidErr: any) {
-        console.error("Video error:", vidErr);
-        if (vidErr.message?.includes('PERMISSION_DENIED')) {
-          await bot.sendMessage(chatId, "(呜呜，录视频需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
-        } else {
-          await bot.sendMessage(chatId, "(呜呜，视频没录好，等下再给你看嘛🥺)");
+          while (!operation.done) {
+            await new Promise(resolve => setTimeout(resolve, 10000));
+            operation = await fetchWithRetry(() => ai.operations.getVideosOperation({operation: operation}));
+          }
+          const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+          if (downloadLink) {
+            const response = await fetchWithRetry(() => fetch(downloadLink, {
+              headers: { 'x-goog-api-key': apiKey }
+            }));
+            const arrayBuffer = await response.arrayBuffer();
+            await bot.sendVideo(chatId, Buffer.from(arrayBuffer));
+          }
+        } catch (vidErr: any) {
+          console.error("Video error:", vidErr);
+          if (vidErr.message?.includes('PERMISSION_DENIED')) {
+            await bot.sendMessage(chatId, "(呜呜，录视频需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
+          } else {
+            await bot.sendMessage(chatId, "(呜呜，视频没录好，等下再给你看嘛🥺)");
+          }
         }
       }
     }

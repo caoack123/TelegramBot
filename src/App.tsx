@@ -28,7 +28,7 @@ export default function App() {
   const [textModel, setTextModel] = useState('gemini-3-flash-preview');
   const [imageModel, setImageModel] = useState('gemini-2.5-flash-image');
   const [videoModel, setVideoModel] = useState('veo-3.1-fast-generate-preview');
-  const [enableVideo, setEnableVideo] = useState(true);
+  const [enableVideo, setEnableVideo] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function App() {
         setTextModel(data.textModel);
         setImageModel(data.imageModel);
         setVideoModel(data.videoModel);
-        setEnableVideo(data.enableVideo ?? true);
+        setEnableVideo(data.enableVideo ?? false);
         setSystemPrompt(data.systemPrompt);
         setHasKv(data.hasKv);
       });

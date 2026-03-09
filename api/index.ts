@@ -1,7 +1,8 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
-import { Redis } from '@upstash/redis';
+import { Redis as UpstashRedis } from '@upstash/redis';
+import Redis from 'ioredis';
 import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
@@ -9,30 +10,59 @@ dotenv.config();
 const PORT = 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-let redisClient: Redis | null = null;
-function getRedis() {
-  if (redisClient !== null) return redisClient;
-  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_API_URL;
-  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_API_TOKEN;
-  if (redisUrl && redisToken) {
+let upstashClient: UpstashRedis | null = null;
+let ioredisClient: Redis | null = null;
+
+function getRedisClient() {
+  if (upstashClient) return { type: 'upstash', client: upstashClient };
+  if (ioredisClient) return { type: 'ioredis', client: ioredisClient };
+
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_API_URL;
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_API_TOKEN;
+  
+  if (upstashUrl && upstashToken) {
     try {
-      redisClient = new Redis({ url: redisUrl, token: redisToken });
+      upstashClient = new UpstashRedis({ url: upstashUrl, token: upstashToken });
+      return { type: 'upstash', client: upstashClient };
     } catch (e) {
-      console.error("Redis init error:", e);
+      console.error("Upstash Redis init error:", e);
     }
   }
-  return redisClient;
+
+  const redisUrl = process.env.REDIS_URL || process.env.KV_URL;
+  if (redisUrl) {
+    try {
+      ioredisClient = new Redis(redisUrl);
+      return { type: 'ioredis', client: ioredisClient };
+    } catch (e) {
+      console.error("ioredis init error:", e);
+    }
+  }
+
+  return null;
 }
 
 // Fallback in-memory store if Redis is not configured
 const memoryStore = new Map<string, any>();
 
 async function getStore<T>(key: string, defaultValue: T): Promise<T> {
-  const redis = getRedis();
+  const redis = getRedisClient();
   if (redis) {
     try {
-      const val = await redis.get<T>(key);
-      return val !== null ? val : defaultValue;
+      if (redis.type === 'upstash') {
+        const val = await (redis.client as UpstashRedis).get<T>(key);
+        return val !== null ? val : defaultValue;
+      } else {
+        const valStr = await (redis.client as Redis).get(key);
+        if (valStr) {
+          try {
+            return JSON.parse(valStr) as T;
+          } catch (e) {
+            return valStr as unknown as T;
+          }
+        }
+        return defaultValue;
+      }
     } catch (e) {
       console.error("Redis get error:", e);
       return defaultValue;
@@ -42,10 +72,15 @@ async function getStore<T>(key: string, defaultValue: T): Promise<T> {
 }
 
 async function setStore(key: string, value: any): Promise<void> {
-  const redis = getRedis();
+  const redis = getRedisClient();
   if (redis) {
     try {
-      await redis.set(key, value);
+      if (redis.type === 'upstash') {
+        await (redis.client as UpstashRedis).set(key, value);
+      } else {
+        const valStr = typeof value === 'string' ? value : JSON.stringify(value);
+        await (redis.client as Redis).set(key, valStr);
+      }
     } catch (e) {
       console.error("Redis set error:", e);
     }
@@ -116,7 +151,7 @@ if (TELEGRAM_TOKEN) {
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...config, hasKv: !!getRedis() });
+  res.json({ ...config, hasKv: !!getRedisClient() });
 });
 
 // Debug endpoint to check environment variables for Redis
@@ -134,21 +169,33 @@ app.get('/api/debug-env', (req, res) => {
 // API to view current store data
 app.get('/api/store', async (req, res) => {
   try {
-    const redis = getRedis();
+    const redis = getRedisClient();
     if (redis) {
-      // Fetch all keys from Redis
-      const keys = await redis.keys('*');
       const data: Record<string, any> = {};
       
-      if (keys.length > 0) {
-        // Fetch values for all keys
-        for (const key of keys) {
-          data[key] = await redis.get(key);
+      if (redis.type === 'upstash') {
+        const keys = await (redis.client as UpstashRedis).keys('*');
+        if (keys.length > 0) {
+          for (const key of keys) {
+            data[key] = await (redis.client as UpstashRedis).get(key);
+          }
+        }
+      } else {
+        const keys = await (redis.client as Redis).keys('*');
+        if (keys.length > 0) {
+          for (const key of keys) {
+            const val = await (redis.client as Redis).get(key);
+            try {
+              data[key] = val ? JSON.parse(val) : null;
+            } catch (e) {
+              data[key] = val;
+            }
+          }
         }
       }
       
       res.json({
-        type: 'Upstash Redis',
+        type: redis.type === 'upstash' ? 'Upstash Redis (REST)' : 'Redis (Connection String)',
         data: data
       });
     } else {

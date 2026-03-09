@@ -12,10 +12,14 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 let redisClient: Redis | null = null;
 function getRedis() {
   if (redisClient !== null) return redisClient;
-  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_API_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_API_TOKEN;
   if (redisUrl && redisToken) {
-    redisClient = new Redis({ url: redisUrl, token: redisToken });
+    try {
+      redisClient = new Redis({ url: redisUrl, token: redisToken });
+    } catch (e) {
+      console.error("Redis init error:", e);
+    }
   }
   return redisClient;
 }
@@ -113,6 +117,18 @@ if (TELEGRAM_TOKEN) {
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
   res.json({ ...config, hasKv: !!getRedis() });
+});
+
+// Debug endpoint to check environment variables for Redis
+app.get('/api/debug-env', (req, res) => {
+  res.json({
+    hasUpstashUrl: !!process.env.UPSTASH_REDIS_REST_URL,
+    hasUpstashToken: !!process.env.UPSTASH_REDIS_REST_TOKEN,
+    hasKvUrl: !!process.env.KV_REST_API_URL,
+    hasKvToken: !!process.env.KV_REST_API_TOKEN,
+    hasRedisUrl: !!process.env.REDIS_URL,
+    envKeys: Object.keys(process.env).filter(k => k.includes('REDIS') || k.includes('KV') || k.includes('UPSTASH'))
+  });
 });
 
 // API to view current store data

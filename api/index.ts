@@ -370,16 +370,34 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
   let historyText = text;
   if (userImageFileId && !text) {
-    historyText = `[男朋友发送了一张照片，并希望你以后发自拍时参考这张脸。照片查看链接: ${baseUrl}/api/file/${userImageFileId} ]`;
+    historyText = `[男朋友发送了一张照片，并希望你以后发自拍时参考这张脸。]`;
   } else if (userImageFileId) {
-    historyText = text + `\n[男朋友附带发送了一张照片，并希望你以后发自拍时参考这张脸。照片查看链接: ${baseUrl}/api/file/${userImageFileId} ]`;
+    historyText = text + `\n[男朋友附带发送了一张照片，并希望你以后发自拍时参考这张脸。]`;
   }
 
-  let history = await getStore<{role: string, parts: {text: string}[]}[]>(`history_${chatId}`, []);
+  // If using Gemini, we can actually pass the image to the text model
+  let geminiImagePart: any = null;
+  if (config.textProvider === 'gemini' && userImageFileId) {
+    try {
+      const fileLink = await bot.getFileLink(userImageFileId);
+      const response = await fetchWithRetry(() => fetch(fileLink));
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      geminiImagePart = { inlineData: { data: base64, mimeType: 'image/jpeg' } };
+    } catch (err) {
+      console.error("Failed to download face for gemini text model:", err);
+    }
+  }
+
+  let history = await getStore<{role: string, parts: any[]}[]>(`history_${chatId}`, []);
   const maxLen = config.maxHistoryLength || 20;
   if (history.length > maxLen) history = history.slice(history.length - maxLen);
   
-  const newHistory = [...history, { role: 'user', parts: [{ text: historyText }] }];
+  const userParts: any[] = [{ text: historyText }];
+  if (geminiImagePart) {
+    userParts.push(geminiImagePart);
+  }
+  const newHistory = [...history, { role: 'user', parts: userParts }];
 
   try {
     const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
@@ -394,8 +412,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     console.log(`[Debug] Using API Key starting with: ${apiKey.substring(0, 4)}..., Length: ${apiKey.length}`);
     
     let activeSystemPrompt = config.systemPrompt;
+    activeSystemPrompt += "\n\n[IMPORTANT: 如果你要发照片，必须严格使用 [PHOTO: 详细的英文描述] 格式，绝对不能用 [IMAGE: ...] 或中文描述！描述必须是纯英文！]";
     if (!config.enableVideo) {
-      activeSystemPrompt += "\n\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
+      activeSystemPrompt += "\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -415,7 +434,12 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       
       for (const m of newHistory) {
         const role = m.role === 'model' ? 'assistant' : 'user';
-        const content = m.parts[0]?.text || '';
+        // For non-Gemini providers, we only extract text parts.
+        // We ignore image parts because most standard OpenAI-compatible APIs 
+        // don't support the Gemini-specific inlineData format.
+        const textParts = m.parts.filter((p: any) => p.text).map((p: any) => p.text);
+        const content = textParts.join('\n');
+        
         if (!content) continue;
         
         if (role === lastRole && normalizedMessages.length > 0) {
@@ -478,14 +502,16 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
     let botText = botTextFull;
     
-    const photoMatch = botTextFull.match(/\[PHOTO:\s*([\s\S]*?)\]/i);
+    // Match [PHOTO: ...], [IMAGE: ...], [图片: ...], [照片: ...]
+    const photoMatch = botTextFull.match(/\[(?:PHOTO|IMAGE|图片|照片)[:：]\s*([\s\S]*?)\]/i);
     let photoPrompt = '';
     if (photoMatch) {
       photoPrompt = photoMatch[1];
       botText = botText.replace(photoMatch[0], '').trim();
     }
 
-    const videoMatch = botTextFull.match(/\[VIDEO:\s*([\s\S]*?)\]/i);
+    // Match [VIDEO: ...], [视频: ...]
+    const videoMatch = botTextFull.match(/\[(?:VIDEO|视频)[:：]\s*([\s\S]*?)\]/i);
     let videoPrompt = '';
     if (videoMatch) {
       videoPrompt = videoMatch[1];

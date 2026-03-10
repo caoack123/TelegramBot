@@ -587,6 +587,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     }
 
     if (config.enableVoice && voicePrompt) {
+      console.log(`[Voice Debug] Attempting to generate voice. Provider: ${config.voiceProvider}, Prompt: ${voicePrompt}`);
       try {
         let textToRead = voicePrompt.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F700}-\u{1F77F}\u{1F780}-\u{1F7FF}\u{1F800}-\u{1F8FF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, ''); // Remove emojis for better TTS
         if (config.maxVoiceLength && textToRead.length > config.maxVoiceLength) {
@@ -598,6 +599,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           let audioBase64 = '';
 
           if (config.voiceProvider === 'openrouter') {
+            console.log(`[Voice Debug] Using OpenRouter TTS`);
             const apiKey = config.openRouterApiKey;
             if (!apiKey) throw new Error("OpenRouter API Key not configured");
 
@@ -630,6 +632,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
             audioBase64 = data.choices?.[0]?.message?.audio?.data || '';
           } else {
             // Gemini TTS
+            console.log(`[Voice Debug] Using Gemini TTS. Model: ${config.voiceModel || "gemini-2.5-flash-preview-tts"}, Style: ${config.voiceStyle || "Kore"}`);
             const response = await fetchWithRetry(() => ai.models.generateContent({
               model: config.voiceModel || "gemini-2.5-flash-preview-tts",
               contents: [{ parts: [{ text: textToRead }] }],
@@ -643,15 +646,25 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
               }
             }));
             audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || '';
+            console.log(`[Voice Debug] Gemini TTS Response received. Audio length: ${audioBase64.length}`);
           }
 
           if (audioBase64) {
+            console.log(`[Voice Debug] Sending voice message to Telegram...`);
             await bot.sendVoice(chatId, Buffer.from(audioBase64, 'base64'));
+            console.log(`[Voice Debug] Voice message sent successfully.`);
+          } else {
+            console.log(`[Voice Debug] Error: audioBase64 is empty.`);
           }
+        } else {
+          console.log(`[Voice Debug] Error: textToRead is empty after removing emojis.`);
         }
       } catch (err: any) {
-        console.error("Voice error:", err);
+        console.error("[Voice Debug] Error generating voice:", err);
+        bot.sendMessage(chatId, `[语音生成失败: ${err.message}]`).catch(() => {});
       }
+    } else {
+      console.log(`[Voice Debug] Voice not triggered. enableVoice: ${config.enableVoice}, voicePrompt: ${voicePrompt ? 'Yes' : 'No'}`);
     }
 
     if (photoPrompt) {

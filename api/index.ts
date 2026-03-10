@@ -635,7 +635,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
             console.log(`[Voice Debug] Using Gemini TTS. Model: ${config.voiceModel || "gemini-2.5-flash-preview-tts"}, Style: ${config.voiceStyle || "Kore"}`);
             const response = await fetchWithRetry(() => ai.models.generateContent({
               model: config.voiceModel || "gemini-2.5-flash-preview-tts",
-              contents: [{ parts: [{ text: textToRead }] }],
+              contents: [{ parts: [{ text: `Please read the following text aloud exactly as it is written, without adding any extra words or text:\n\n${textToRead}` }] }],
               config: {
                 responseModalities: [Modality.AUDIO],
                 speechConfig: {

@@ -651,7 +651,32 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
           if (audioBase64) {
             console.log(`[Voice Debug] Sending voice message to Telegram...`);
-            await bot.sendVoice(chatId, Buffer.from(audioBase64, 'base64'));
+            let audioBuffer = Buffer.from(audioBase64, 'base64');
+            
+            if (config.voiceProvider !== 'openrouter') {
+               // Gemini returns raw PCM (16-bit, 24kHz, mono). Add WAV header so Telegram can play it.
+               const pcmData = audioBuffer;
+               const sampleRate = 24000;
+               const numChannels = 1;
+               const bitsPerSample = 16;
+               const header = Buffer.alloc(44);
+               header.write('RIFF', 0);
+               header.writeUInt32LE(pcmData.length + 36, 4);
+               header.write('WAVE', 8);
+               header.write('fmt ', 12);
+               header.writeUInt32LE(16, 16);
+               header.writeUInt16LE(1, 20);
+               header.writeUInt16LE(numChannels, 22);
+               header.writeUInt32LE(sampleRate, 24);
+               header.writeUInt32LE(sampleRate * numChannels * (bitsPerSample / 8), 28);
+               header.writeUInt16LE(numChannels * (bitsPerSample / 8), 32);
+               header.writeUInt16LE(bitsPerSample, 34);
+               header.write('data', 36);
+               header.writeUInt32LE(pcmData.length, 40);
+               audioBuffer = Buffer.concat([header, pcmData]);
+            }
+
+            await bot.sendVoice(chatId, audioBuffer, {}, { filename: 'voice.wav', contentType: 'audio/wav' });
             console.log(`[Voice Debug] Voice message sent successfully.`);
           } else {
             console.log(`[Voice Debug] Error: audioBase64 is empty.`);

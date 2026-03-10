@@ -461,9 +461,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     
     // Voice instruction
     if (config.enableVoice) {
-      activeSystemPrompt += "\n[IMPORTANT: 如果用户要求你发语音，或者你想主动发语音，请在你的回复文本中包含一个特殊的标记：[VOICE: 你想说的话]。系统会自动把标记里的文字转换成真实的语音发给用户。平时正常聊天不需要加这个标记。绝对不要在文字中说你不能发语音！]";
+      activeSystemPrompt += "\n\n【最高优先级指令 - 语音功能】\n当用户要求你“发语音”、“说句话听听”或类似请求时，你**必须**使用 `[VOICE: 你想说的具体内容]` 格式来回复！\n错误示范：“好的，我现在发语音给你！”（没有使用标记，系统无法识别）\n正确示范：“来啦来啦！[VOICE: 哥哥晚上好，今天过得开心吗？]”（使用了标记，系统会把标记里的字转成真实语音）\n绝对不要在文字中说你发不了语音，系统会自动帮你转！";
     } else {
-      activeSystemPrompt += "\n[IMPORTANT: 语音生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VOICE: ...] 标记。如果用户要求听语音，请委婉地拒绝，比如撒娇说现在不方便发语音。]";
+      activeSystemPrompt += "\n\n【最高优先级指令 - 语音功能】\n语音功能当前已关闭。无论用户如何要求，绝对不要使用 [VOICE: ...] 标记。如果用户要求听语音，请委婉地拒绝，比如撒娇说现在嗓子疼不方便说话。";
     }
 
     const ai = new GoogleGenAI({ apiKey });
@@ -573,6 +573,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     if (voiceMatch) {
       voicePrompt = voiceMatch[1];
       botText = botText.replace(voiceMatch[0], '').trim();
+    } else if (config.enableVoice && (text.includes('语音') || text.includes('说话') || text.includes('听听') || text.includes('声音'))) {
+      // Fallback: If user asked for voice and bot forgot the tag, use the bot's text as voice
+      voicePrompt = botText;
     }
 
     // Save history initially

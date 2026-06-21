@@ -120,3 +120,4 @@ export function isAllowedTelegramChat(chatId: number): boolean {
     .filter(Boolean);
   return configuredIds.length === 0 || configuredIds.includes(String(chatId));
 }
+

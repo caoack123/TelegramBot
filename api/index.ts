@@ -10,7 +10,7 @@ import {
   registerAuthRoutes,
   requireAdmin,
   verifyTelegramWebhook,
-} from './security.js';
+} from '../server/security.js';
 
 dotenv.config();
 
@@ -103,6 +103,19 @@ async function setStore(key: string, value: any): Promise<void> {
     }
   } else {
     memoryStore.set(key, value);
+  }
+}
+
+async function isPersistentStoreAvailable(): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+
+  try {
+    await redis.client.ping();
+    return true;
+  } catch (error) {
+    console.error('Redis health check error:', error);
+    return false;
   }
 }
 
@@ -265,7 +278,7 @@ function mergeConfig(current: typeof DEFAULT_CONFIG, input: Record<string, unkno
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...sanitizeConfig(config), hasKv: !!getRedisClient() });
+  res.json({ ...sanitizeConfig(config), hasKv: await isPersistentStoreAvailable() });
 });
 
 // Debug endpoint to check environment variables for Redis

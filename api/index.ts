@@ -5,6 +5,12 @@ import { Redis as UpstashRedis } from '@upstash/redis';
 import Redis from 'ioredis';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { waitUntil } from '@vercel/functions';
+import {
+  isAllowedTelegramChat,
+  registerAuthRoutes,
+  requireAdmin,
+  verifyTelegramWebhook,
+} from '../server/security.js';
 
 dotenv.config();
 
@@ -97,6 +103,19 @@ async function setStore(key: string, value: any): Promise<void> {
     }
   } else {
     memoryStore.set(key, value);
+  }
+}
+
+async function isPersistentStoreAvailable(): Promise<boolean> {
+  const redis = getRedisClient();
+  if (!redis) return false;
+
+  try {
+    await redis.client.ping();
+    return true;
+  } catch (error) {
+    console.error('Redis health check error:', error);
+    return false;
   }
 }
 
@@ -207,7 +226,8 @@ const fetchWithRetry = async <T,>(fn: () => Promise<T>, maxRetries = 3): Promise
 };
 
 const app = express();
-app.use(express.json({ limit: '50mb' })); // Allow large payloads for webhooks
+app.disable('x-powered-by');
+app.use(express.json({ limit: '2mb' }));
 
 let bot: TelegramBot | null = null;
 if (TELEGRAM_TOKEN) {
@@ -223,10 +243,42 @@ if (TELEGRAM_TOKEN) {
   */
 }
 
+registerAuthRoutes(app);
+app.use('/api', (req, res, next) => {
+  if (req.path === '/webhook' || req.path === '/health') return next();
+  return requireAdmin(req, res, next);
+});
+
+const CONFIG_SECRET_FIELDS = ['openRouterApiKey', 'customTextApiKey', 'customImageApiKey', 'customVideoApiKey'] as const;
+
+function sanitizeConfig(config: typeof DEFAULT_CONFIG) {
+  const sanitized: Record<string, any> = { ...config };
+  for (const field of CONFIG_SECRET_FIELDS) {
+    sanitized[`has${field[0].toUpperCase()}${field.slice(1)}`] = Boolean(config[field]);
+    sanitized[field] = '';
+  }
+  return sanitized;
+}
+
+function mergeConfig(current: typeof DEFAULT_CONFIG, input: Record<string, unknown>): typeof DEFAULT_CONFIG {
+  const next = { ...current } as Record<string, any>;
+  for (const key of Object.keys(DEFAULT_CONFIG)) {
+    if (!(key in input)) continue;
+    const value = input[key];
+    if (CONFIG_SECRET_FIELDS.includes(key as typeof CONFIG_SECRET_FIELDS[number]) && value === '') continue;
+    next[key] = value;
+  }
+
+  next.maxHistoryLength = Math.min(100, Math.max(1, Number(next.maxHistoryLength) || 20));
+  next.maxVoiceLength = Math.min(1000, Math.max(1, Number(next.maxVoiceLength) || 100));
+  next.systemPrompt = String(next.systemPrompt || '').slice(0, 20_000);
+  return next as typeof DEFAULT_CONFIG;
+}
+
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...config, hasKv: !!getRedisClient() });
+  res.json({ ...sanitizeConfig(config), hasKv: await isPersistentStoreAvailable() });
 });
 
 // Debug endpoint to check environment variables for Redis
@@ -252,7 +304,8 @@ app.get('/api/store', async (req, res) => {
         const keys = await (redis.client as UpstashRedis).keys('*');
         if (keys.length > 0) {
           for (const key of keys) {
-            data[key] = await (redis.client as UpstashRedis).get(key);
+            const value = await (redis.client as UpstashRedis).get(key);
+            data[key] = key === 'bot_config' ? sanitizeConfig(value as typeof DEFAULT_CONFIG) : value;
           }
         }
       } else {
@@ -261,7 +314,8 @@ app.get('/api/store', async (req, res) => {
           for (const key of keys) {
             const val = await (redis.client as Redis).get(key);
             try {
-              data[key] = val ? JSON.parse(val) : null;
+              const value = val ? JSON.parse(val) : null;
+              data[key] = key === 'bot_config' ? sanitizeConfig(value) : value;
             } catch (e) {
               data[key] = val;
             }
@@ -288,7 +342,8 @@ app.get('/api/store', async (req, res) => {
 
 // API to save config
 app.post('/api/config', async (req, res) => {
-  await setStore('bot_config', req.body);
+  const current = await getStore('bot_config', DEFAULT_CONFIG);
+  await setStore('bot_config', mergeConfig(current, req.body || {}));
   res.json({ success: true });
 });
 
@@ -318,7 +373,9 @@ app.get('/api/set-webhook', async (req, res) => {
   try {
     // req.headers.host will be the Vercel domain (e.g., my-app.vercel.app)
     const webhookUrl = `https://${req.headers.host}/api/webhook`;
-    await bot.setWebHook(webhookUrl, { drop_pending_updates: true } as any);
+    const secretToken = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (!secretToken) return res.status(503).json({ error: 'TELEGRAM_WEBHOOK_SECRET is not configured.' });
+    await bot.setWebHook(webhookUrl, { drop_pending_updates: true, secret_token: secretToken } as any);
     res.json({ 
       success: true, 
       message: "Webhook set successfully!", 
@@ -401,7 +458,14 @@ async function processTelegramUpdate(update: TelegramBot.Update, host?: string) 
 // Acknowledge Telegram immediately so it does not retry slow AI requests.
 // Vercel keeps the background work alive through waitUntil().
 app.post('/api/webhook', (req, res) => {
+  if (!verifyTelegramWebhook(req)) return res.status(401).send('Invalid webhook signature');
   if (!bot) return res.status(200).send('Bot not configured');
+
+  const chatId = req.body?.message?.chat?.id;
+  if (typeof chatId === 'number' && !isAllowedTelegramChat(chatId)) {
+    console.warn(`[Webhook] Ignoring message from unauthorized chat ${chatId}`);
+    return res.status(200).send('OK');
+  }
 
   const work = processTelegramUpdate(req.body, req.headers.host);
   if (process.env.VERCEL) {
@@ -756,7 +820,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
         }
       } catch (err: any) {
         console.error("[Voice Debug] Error generating voice:", err);
-        bot.sendMessage(chatId, `[语音生成失败: ${err.message}]`).catch(() => {});
+        bot.sendMessage(chatId, '（呜呜，语音生成失败了，稍后再试试吧🥺）').catch(() => {});
       }
     } else {
       console.log(`[Voice Debug] Voice not triggered. enableVoice: ${config.enableVoice}, voicePrompt: ${voicePrompt ? 'Yes' : 'No'}`);
@@ -880,7 +944,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
         if (imgErr.message?.includes('PERMISSION_DENIED')) {
           await bot.sendMessage(chatId, "(呜呜，生成照片需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
         } else {
-          await bot.sendMessage(chatId, `(呜呜，照片没拍好，等下再给你看嘛🥺 错误详情: ${imgErr.message})`);
+          await bot.sendMessage(chatId, '(呜呜，照片没拍好，等下再给你看嘛🥺)');
         }
       }
     }
@@ -953,7 +1017,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           if (vidErr.message?.includes('PERMISSION_DENIED')) {
             await bot.sendMessage(chatId, "(呜呜，录视频需要配置付费 API Key，请主人在控制台配置一下哦🥺)");
           } else {
-            await bot.sendMessage(chatId, `(呜呜，视频没录好，等下再给你看嘛🥺 错误详情: ${vidErr.message})`);
+            await bot.sendMessage(chatId, '(呜呜，视频没录好，等下再给你看嘛🥺)');
           }
         }
       }
@@ -961,31 +1025,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 
   } catch (err: any) {
     console.error("Bot logic error:", err);
-    const isVercel = !!process.env.VERCEL;
-    
-    let keyPrefix = 'none';
-    let keyLen = 0;
-    let providerName = 'Unknown';
-    
-    try {
-      const config = await getStore('bot_config', DEFAULT_CONFIG);
-      if (config.textProvider === 'openrouter') {
-        providerName = 'OpenRouter';
-        const orKey = config.openRouterApiKey || '';
-        keyPrefix = orKey ? orKey.substring(0, 4) : 'none';
-        keyLen = orKey ? orKey.length : 0;
-      } else {
-        providerName = 'Gemini';
-        const rawApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
-        const apiKey = rawApiKey.replace(/^["']|["']$/g, '').trim();
-        keyPrefix = apiKey ? apiKey.substring(0, 4) : 'none';
-        keyLen = apiKey ? apiKey.length : 0;
-      }
-    } catch (e) {
-      // Fallback if config fetch fails
-    }
-    
-    await bot.sendMessage(chatId, `呜呜，我脑子有点卡壳了，等我一下下哦🥺\n\n[Env: ${isVercel ? 'Vercel' : 'Local'}, Provider: ${providerName}, Key: ${keyPrefix}...(${keyLen})]\n(Debug Error: ${err.message})`);
+    await bot.sendMessage(chatId, '呜呜，我脑子有点卡壳了，等我一下下哦🥺');
   }
 };
 

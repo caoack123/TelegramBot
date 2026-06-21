@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database, MessageSquare, Image as ImageIcon, Code, RefreshCw } from 'lucide-react';
+import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database, MessageSquare, Image as ImageIcon, Code, RefreshCw, LogOut } from 'lucide-react';
+import { LoginScreen } from './LoginScreen';
 
 declare global {
   interface Window {
@@ -11,6 +12,7 @@ declare global {
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [status, setStatus] = useState<'loading' | 'active' | 'inactive'>('loading');
   const [hasPaidKey, setHasPaidKey] = useState(false);
   const [hasKv, setHasKv] = useState(false);
@@ -51,25 +53,28 @@ export default function App() {
   const [maxHistoryLength, setMaxHistoryLength] = useState(20);
   const [systemPrompt, setSystemPrompt] = useState('');
 
-  useEffect(() => {
+  const loadDashboard = async () => {
     const checkKey = async () => {
       if (window.aistudio?.hasSelectedApiKey) {
         const hasKey = await window.aistudio.hasSelectedApiKey();
         setHasPaidKey(hasKey);
       }
     };
-    checkKey();
+    await checkKey();
 
-    fetch('/api/health')
-      .then(res => res.json())
-      .then(data => {
-        setStatus(data.botActive ? 'active' : 'inactive');
-      })
-      .catch(() => setStatus('inactive'));
+    try {
+      const [healthResponse, configResponse] = await Promise.all([
+        fetch('/api/health'),
+        fetch('/api/config'),
+      ]);
+      if (configResponse.status === 401) {
+        setAuthState('unauthenticated');
+        return;
+      }
+      if (!configResponse.ok) throw new Error('配置加载失败');
 
-    fetch('/api/config')
-      .then(res => res.json())
-      .then(data => {
+      const [health, data] = await Promise.all([healthResponse.json(), configResponse.json()]);
+      setStatus(health.botActive ? 'active' : 'inactive');
         setTextProvider(data.textProvider);
         setOpenRouterApiKey(data.openRouterApiKey);
         setOpenRouterModel(data.openRouterModel);
@@ -98,13 +103,33 @@ export default function App() {
         setMaxHistoryLength(data.maxHistoryLength ?? 20);
         setSystemPrompt(data.systemPrompt);
         setHasKv(data.hasKv);
-      });
+      setAuthState('authenticated');
+    } catch (error) {
+      console.error(error);
+      setStatus('inactive');
+    }
+  };
+
+  useEffect(() => {
+    fetch('/api/auth/status')
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.authenticated) return loadDashboard();
+        setAuthState('unauthenticated');
+      })
+      .catch(() => setAuthState('unauthenticated'));
   }, []);
+
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setStoreData(null);
+    setAuthState('unauthenticated');
+  };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch('/api/config', {
+      const response = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -135,6 +160,7 @@ export default function App() {
           systemPrompt
         })
       });
+      if (!response.ok) throw new Error('保存失败');
       alert('配置保存成功！');
     } catch (e) {
       alert('保存失败，请重试。');
@@ -286,10 +312,27 @@ export default function App() {
     );
   };
 
+  if (authState === 'loading') {
+    return <div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-500">正在验证身份…</div>;
+  }
+
+  if (authState === 'unauthenticated') {
+    return <LoginScreen onAuthenticated={loadDashboard} />;
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 font-sans">
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div className="bg-[#2AABEE] p-8 text-white text-center">
+        <div className="relative bg-[#2AABEE] p-8 text-white text-center">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="absolute right-4 top-4 rounded-lg p-2 text-blue-100 hover:bg-white/10 hover:text-white"
+            aria-label="退出登录"
+            title="退出登录"
+          >
+            <LogOut className="w-5 h-5" aria-hidden="true" />
+          </button>
           <Bot className="w-16 h-16 mx-auto mb-4 opacity-90" />
           <h1 className="text-3xl font-bold mb-2">俏皮女友 Telegram Bot</h1>
           <p className="text-blue-100">Vercel Serverless 就绪版控制台</p>
@@ -415,7 +458,7 @@ export default function App() {
                     </div>
                     <div className="md:col-span-2">
                       <label className="block text-sm font-medium text-gray-700 mb-1">OpenRouter API Key</label>
-                      <input type="password" value={openRouterApiKey} onChange={e => setOpenRouterApiKey(e.target.value)} placeholder="sk-or-v1-..." className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+                      <input type="password" value={openRouterApiKey} onChange={e => setOpenRouterApiKey(e.target.value)} placeholder="输入新 Key；留空则保留原值" className="w-full border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
                     </div>
                   </>
                 ) : (
@@ -426,7 +469,7 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
-                      <input type="password" value={customTextApiKey} onChange={e => setCustomTextApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                      <input type="password" value={customTextApiKey} onChange={e => setCustomTextApiKey(e.target.value)} placeholder="输入新 Token；留空则保留原值" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>
@@ -532,7 +575,7 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
-                      <input type="password" value={customImageApiKey} onChange={e => setCustomImageApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                      <input type="password" value={customImageApiKey} onChange={e => setCustomImageApiKey(e.target.value)} placeholder="输入新 Token；留空则保留原值" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>
@@ -567,7 +610,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">API Key</label>
-                        <input type="password" value={customVideoApiKey} onChange={e => setCustomVideoApiKey(e.target.value)} placeholder="Bearer Token" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+                        <input type="password" value={customVideoApiKey} onChange={e => setCustomVideoApiKey(e.target.value)} placeholder="输入新 Token；留空则保留原值" className="w-full border border-gray-300 rounded p-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">模型名称</label>

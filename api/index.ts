@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { Redis as UpstashRedis } from '@upstash/redis';
 import Redis from 'ioredis';
 import { GoogleGenAI, Modality } from '@google/genai';
+import { waitUntil } from '@vercel/functions';
 
 dotenv.config();
 
@@ -32,7 +33,16 @@ function getRedisClient() {
   const redisUrl = process.env.REDIS_URL || process.env.KV_URL;
   if (redisUrl) {
     try {
-      ioredisClient = new Redis(redisUrl);
+      ioredisClient = new Redis(redisUrl, {
+        connectTimeout: 2000,
+        commandTimeout: 2000,
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: false,
+        retryStrategy: () => null,
+      });
+      ioredisClient.on('error', (error) => {
+        console.error('Redis connection error:', error.message);
+      });
       return { type: 'ioredis', client: ioredisClient };
     } catch (e) {
       console.error("ioredis init error:", e);
@@ -65,7 +75,7 @@ async function getStore<T>(key: string, defaultValue: T): Promise<T> {
       }
     } catch (e) {
       console.error("Redis get error:", e);
-      return defaultValue;
+      return memoryStore.has(key) ? memoryStore.get(key) : defaultValue;
     }
   }
   return memoryStore.has(key) ? memoryStore.get(key) : defaultValue;
@@ -83,10 +93,57 @@ async function setStore(key: string, value: any): Promise<void> {
       }
     } catch (e) {
       console.error("Redis set error:", e);
+      memoryStore.set(key, value);
     }
   } else {
     memoryStore.set(key, value);
   }
+}
+
+const recentTelegramUpdates = new Map<number, number>();
+const TELEGRAM_UPDATE_TTL_SECONDS = 10 * 60;
+
+async function claimTelegramUpdate(updateId: number | undefined): Promise<boolean> {
+  if (typeof updateId !== 'number') return true;
+
+  const key = `telegram_update_${updateId}`;
+  const redis = getRedisClient();
+
+  if (redis) {
+    try {
+      if (redis.type === 'upstash') {
+        const result = await (redis.client as UpstashRedis).set(key, '1', {
+          nx: true,
+          ex: TELEGRAM_UPDATE_TTL_SECONDS,
+        });
+        return result === 'OK';
+      }
+
+      const result = await (redis.client as Redis).set(
+        key,
+        '1',
+        'EX',
+        TELEGRAM_UPDATE_TTL_SECONDS,
+        'NX',
+      );
+      return result === 'OK';
+    } catch (error) {
+      console.error('Telegram update dedupe Redis error:', error);
+    }
+  }
+
+  const now = Date.now();
+  const expiresAt = recentTelegramUpdates.get(updateId);
+  if (expiresAt && expiresAt > now) return false;
+
+  recentTelegramUpdates.set(updateId, now + TELEGRAM_UPDATE_TTL_SECONDS * 1000);
+  if (recentTelegramUpdates.size > 1000) {
+    for (const [id, expiry] of recentTelegramUpdates) {
+      if (expiry <= now) recentTelegramUpdates.delete(id);
+    }
+  }
+
+  return true;
 }
 
 const DEFAULT_CONFIG = {
@@ -322,24 +379,37 @@ app.get('/api/test-gemini', async (req, res) => {
   }
 });
 
-// Webhook endpoint for Telegram
-app.post('/api/webhook', async (req, res) => {
-  if (!bot) return res.status(200).send('Bot not configured');
+async function processTelegramUpdate(update: TelegramBot.Update, host?: string) {
+  if (!bot) return;
+
   try {
-    const update = req.body;
-    
-    // In serverless environments, we must await the handler before sending the response.
-    // bot.processUpdate() triggers events but doesn't wait for async handlers to finish,
-    // causing Vercel to kill the function prematurely (hence the "typing..." but no reply).
+    if (!(await claimTelegramUpdate(update.update_id))) {
+      console.log(`[Webhook] Ignoring duplicate Telegram update ${update.update_id}`);
+      return;
+    }
+
     if (update.message) {
-      await handleMessage(update.message, req.headers.host);
+      await handleMessage(update.message, host);
     } else {
-      // For other update types, just process normally (might get cut off, but less critical)
       bot.processUpdate(update);
     }
   } catch (e) {
     console.error("Error processing update:", e);
   }
+}
+
+// Acknowledge Telegram immediately so it does not retry slow AI requests.
+// Vercel keeps the background work alive through waitUntil().
+app.post('/api/webhook', (req, res) => {
+  if (!bot) return res.status(200).send('Bot not configured');
+
+  const work = processTelegramUpdate(req.body, req.headers.host);
+  if (process.env.VERCEL) {
+    waitUntil(work);
+  } else {
+    void work;
+  }
+
   res.status(200).send('OK');
 });
 
@@ -920,7 +990,9 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
 };
 
 if (bot) {
-  bot.on('message', handleMessage);
+  bot.on('message', (message) => {
+    void handleMessage(message);
+  });
 }
 
 // Export the express app for Vercel Serverless

@@ -1,8 +1,6 @@
 import express from 'express';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
-import { Redis as UpstashRedis } from '@upstash/redis';
-import Redis from 'ioredis';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { waitUntil } from '@vercel/functions';
 import {
@@ -11,111 +9,37 @@ import {
   requireAdmin,
   verifyTelegramWebhook,
 } from '../server/security.js';
+import {
+  claimPersistentUpdate,
+  getPersistentState,
+  isPersistentStorageAvailable,
+  listPersistentState,
+  setPersistentState,
+} from '../server/storage.js';
 
 dotenv.config();
 
 const PORT = 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-let upstashClient: UpstashRedis | null = null;
-let ioredisClient: Redis | null = null;
-
-function getRedisClient() {
-  if (upstashClient) return { type: 'upstash', client: upstashClient };
-  if (ioredisClient) return { type: 'ioredis', client: ioredisClient };
-
-  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.REDIS_REST_API_URL;
-  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.REDIS_REST_API_TOKEN;
-  
-  if (upstashUrl && upstashToken) {
-    try {
-      upstashClient = new UpstashRedis({ url: upstashUrl, token: upstashToken });
-      return { type: 'upstash', client: upstashClient };
-    } catch (e) {
-      console.error("Upstash Redis init error:", e);
-    }
-  }
-
-  const redisUrl = process.env.REDIS_URL || process.env.KV_URL;
-  if (redisUrl) {
-    try {
-      ioredisClient = new Redis(redisUrl, {
-        connectTimeout: 2000,
-        commandTimeout: 2000,
-        maxRetriesPerRequest: 1,
-        enableOfflineQueue: false,
-        retryStrategy: () => null,
-      });
-      ioredisClient.on('error', (error) => {
-        console.error('Redis connection error:', error.message);
-      });
-      return { type: 'ioredis', client: ioredisClient };
-    } catch (e) {
-      console.error("ioredis init error:", e);
-    }
-  }
-
-  return null;
-}
-
-// Fallback in-memory store if Redis is not configured
 const memoryStore = new Map<string, any>();
 
 async function getStore<T>(key: string, defaultValue: T): Promise<T> {
-  const redis = getRedisClient();
-  if (redis) {
-    try {
-      if (redis.type === 'upstash') {
-        const val = await (redis.client as UpstashRedis).get<T>(key);
-        return val !== null ? val : defaultValue;
-      } else {
-        const valStr = await (redis.client as Redis).get(key);
-        if (valStr) {
-          try {
-            return JSON.parse(valStr) as T;
-          } catch (e) {
-            return valStr as unknown as T;
-          }
-        }
-        return defaultValue;
-      }
-    } catch (e) {
-      console.error("Redis get error:", e);
-      return memoryStore.has(key) ? memoryStore.get(key) : defaultValue;
-    }
+  try {
+    const value = await getPersistentState<T>(key);
+    if (value !== undefined) return value;
+  } catch (error) {
+    console.error('Supabase get error:', error);
   }
   return memoryStore.has(key) ? memoryStore.get(key) : defaultValue;
 }
 
 async function setStore(key: string, value: any): Promise<void> {
-  const redis = getRedisClient();
-  if (redis) {
-    try {
-      if (redis.type === 'upstash') {
-        await (redis.client as UpstashRedis).set(key, value);
-      } else {
-        const valStr = typeof value === 'string' ? value : JSON.stringify(value);
-        await (redis.client as Redis).set(key, valStr);
-      }
-    } catch (e) {
-      console.error("Redis set error:", e);
-      memoryStore.set(key, value);
-    }
-  } else {
-    memoryStore.set(key, value);
-  }
-}
-
-async function isPersistentStoreAvailable(): Promise<boolean> {
-  const redis = getRedisClient();
-  if (!redis) return false;
-
   try {
-    await redis.client.ping();
-    return true;
+    await setPersistentState(key, value);
   } catch (error) {
-    console.error('Redis health check error:', error);
-    return false;
+    console.error('Supabase set error:', error);
+    memoryStore.set(key, value);
   }
 }
 
@@ -125,30 +49,11 @@ const TELEGRAM_UPDATE_TTL_SECONDS = 10 * 60;
 async function claimTelegramUpdate(updateId: number | undefined): Promise<boolean> {
   if (typeof updateId !== 'number') return true;
 
-  const key = `telegram_update_${updateId}`;
-  const redis = getRedisClient();
-
-  if (redis) {
-    try {
-      if (redis.type === 'upstash') {
-        const result = await (redis.client as UpstashRedis).set(key, '1', {
-          nx: true,
-          ex: TELEGRAM_UPDATE_TTL_SECONDS,
-        });
-        return result === 'OK';
-      }
-
-      const result = await (redis.client as Redis).set(
-        key,
-        '1',
-        'EX',
-        TELEGRAM_UPDATE_TTL_SECONDS,
-        'NX',
-      );
-      return result === 'OK';
-    } catch (error) {
-      console.error('Telegram update dedupe Redis error:', error);
-    }
+  try {
+    const claimed = await claimPersistentUpdate(updateId);
+    if (claimed !== null) return claimed;
+  } catch (error) {
+    console.error('Telegram update dedupe Supabase error:', error);
   }
 
   const now = Date.now();
@@ -278,63 +183,27 @@ function mergeConfig(current: typeof DEFAULT_CONFIG, input: Record<string, unkno
 // API to get config
 app.get('/api/config', async (req, res) => {
   const config = await getStore('bot_config', DEFAULT_CONFIG);
-  res.json({ ...sanitizeConfig(config), hasKv: await isPersistentStoreAvailable() });
+  res.json({ ...sanitizeConfig(config), hasKv: await isPersistentStorageAvailable() });
 });
 
-// Debug endpoint to check environment variables for Redis
+// Debug endpoint to check persistent storage configuration without exposing secrets
 app.get('/api/debug-env', (req, res) => {
   res.json({
-    hasUpstashUrl: !!process.env.UPSTASH_REDIS_REST_URL,
-    hasUpstashToken: !!process.env.UPSTASH_REDIS_REST_TOKEN,
-    hasKvUrl: !!process.env.KV_REST_API_URL,
-    hasKvToken: !!process.env.KV_REST_API_TOKEN,
-    hasRedisUrl: !!process.env.REDIS_URL,
-    envKeys: Object.keys(process.env).filter(k => k.includes('REDIS') || k.includes('KV') || k.includes('UPSTASH'))
+    hasSupabaseUrl: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
+    hasSupabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY),
   });
 });
 
 // API to view current store data
 app.get('/api/store', async (req, res) => {
   try {
-    const redis = getRedisClient();
-    if (redis) {
-      const data: Record<string, any> = {};
-      
-      if (redis.type === 'upstash') {
-        const keys = await (redis.client as UpstashRedis).keys('*');
-        if (keys.length > 0) {
-          for (const key of keys) {
-            const value = await (redis.client as UpstashRedis).get(key);
-            data[key] = key === 'bot_config' ? sanitizeConfig(value as typeof DEFAULT_CONFIG) : value;
-          }
-        }
-      } else {
-        const keys = await (redis.client as Redis).keys('*');
-        if (keys.length > 0) {
-          for (const key of keys) {
-            const val = await (redis.client as Redis).get(key);
-            try {
-              const value = val ? JSON.parse(val) : null;
-              data[key] = key === 'bot_config' ? sanitizeConfig(value) : value;
-            } catch (e) {
-              data[key] = val;
-            }
-          }
-        }
-      }
-      
-      res.json({
-        type: redis.type === 'upstash' ? 'Upstash Redis (REST)' : 'Redis (Connection String)',
-        data: data
-      });
-    } else {
-      // Memory store is easy to dump
-      const obj = Object.fromEntries(memoryStore);
-      res.json({
-        type: 'Memory Store',
-        data: obj
-      });
-    }
+    const persistentData = await listPersistentState();
+    const data = persistentData || Object.fromEntries(memoryStore);
+    if (data.bot_config) data.bot_config = sanitizeConfig(data.bot_config as typeof DEFAULT_CONFIG);
+    res.json({
+      type: persistentData ? 'Supabase Postgres' : 'Memory Store',
+      data,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -540,7 +409,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
   
   if (userImageFileId) {
     await setStore(`user_face_fileid_${chatId}`, userImageFileId);
-    // Clear old base64 data to free up Redis space immediately
+    // Clear old base64 data; the Telegram file ID is enough to fetch it later.
     await setStore(`user_face_${chatId}`, '');
   }
 

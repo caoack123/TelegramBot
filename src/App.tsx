@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Bot, CheckCircle, AlertCircle, Settings, Key, Save, Database, MessageSquare, Image as ImageIcon, Code, RefreshCw, LogOut } from 'lucide-react';
 import { LoginScreen } from './LoginScreen';
+import { PERSONA_PRESETS } from '../shared/personas';
 
 declare global {
   interface Window {
@@ -52,6 +53,7 @@ export default function App() {
   const [maxVoiceLength, setMaxVoiceLength] = useState(100);
   const [maxHistoryLength, setMaxHistoryLength] = useState(20);
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [personaPreset, setPersonaPreset] = useState('custom');
 
   const loadDashboard = async () => {
     const checkKey = async () => {
@@ -102,6 +104,7 @@ export default function App() {
         setMaxVoiceLength(data.maxVoiceLength ?? 100);
         setMaxHistoryLength(data.maxHistoryLength ?? 20);
         setSystemPrompt(data.systemPrompt);
+        setPersonaPreset(data.personaPreset || 'custom');
         setHasKv(data.hasKv);
       setAuthState('authenticated');
     } catch (error) {
@@ -126,44 +129,45 @@ export default function App() {
     setAuthState('unauthenticated');
   };
 
+  const getConfigPayload = (overrides: Record<string, unknown> = {}) => ({
+    textProvider, openRouterApiKey, openRouterModel, customTextEndpoint, customTextApiKey,
+    customTextModel, textModel, imageProvider, imageModel, customImageEndpoint,
+    customImageApiKey, customImageModel, videoProvider, videoModel, customVideoEndpoint,
+    customVideoApiKey, customVideoModel, enableVideo, enableVoice, voiceProvider,
+    voiceModel, voiceStyle, maxVoiceLength, maxHistoryLength, systemPrompt, personaPreset,
+    ...overrides,
+  });
+
   const handleSave = async () => {
     setSaving(true);
     try {
       const response = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          textProvider,
-          openRouterApiKey,
-          openRouterModel,
-          customTextEndpoint,
-          customTextApiKey,
-          customTextModel,
-          textModel,
-          imageProvider,
-          imageModel,
-          customImageEndpoint,
-          customImageApiKey,
-          customImageModel,
-          videoProvider,
-          videoModel,
-          customVideoEndpoint,
-          customVideoApiKey,
-          customVideoModel,
-          enableVideo,
-          enableVoice,
-          voiceProvider,
-          voiceModel,
-          voiceStyle,
-          maxVoiceLength,
-          maxHistoryLength,
-          systemPrompt
-        })
+        body: JSON.stringify(getConfigPayload())
       });
       if (!response.ok) throw new Error('保存失败');
       alert('配置保存成功！');
     } catch (e) {
       alert('保存失败，请重试。');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePersonaSwitch = async (preset: typeof PERSONA_PRESETS[number]) => {
+    setSaving(true);
+    try {
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(getConfigPayload({ personaPreset: preset.id, systemPrompt: preset.prompt })),
+      });
+      if (!response.ok) throw new Error('切换失败');
+      setPersonaPreset(preset.id);
+      setSystemPrompt(preset.prompt);
+    } catch {
+      alert('人格切换失败，请重试。');
     } finally {
       setSaving(false);
     }
@@ -646,10 +650,26 @@ export default function App() {
             </div>
 
             <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">一键切换人格</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                {PERSONA_PRESETS.map((preset) => (
+                  <button
+                    type="button"
+                    key={preset.id}
+                    disabled={saving}
+                    onClick={() => handlePersonaSwitch(preset)}
+                    className={`text-left rounded-lg border p-3 transition-colors disabled:opacity-50 ${personaPreset === preset.id ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white hover:border-blue-300'}`}
+                  >
+                    <span className="block text-sm font-medium text-gray-900">{preset.name}</span>
+                    <span className="block text-xs text-gray-500 mt-1">{preset.description}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mb-4">点击后立即生效。手动修改下方提示词会自动切换为“自定义”。</p>
               <label className="block text-sm font-medium text-gray-700 mb-1">系统提示词 (Prompt)</label>
               <textarea 
                 value={systemPrompt} 
-                onChange={e => setSystemPrompt(e.target.value)}
+                onChange={e => { setSystemPrompt(e.target.value); setPersonaPreset('custom'); }}
                 className="w-full border border-gray-300 rounded-lg p-3 text-sm h-48 font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               />
             </div>

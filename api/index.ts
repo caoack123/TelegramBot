@@ -10,12 +10,16 @@ import {
   verifyTelegramWebhook,
 } from '../server/security.js';
 import {
+  appendChatTurn,
   claimPersistentUpdate,
+  clearChatHistory,
+  getChatHistory,
   getPersistentState,
   isPersistentStorageAvailable,
   listPersistentState,
   setPersistentState,
 } from '../server/storage.js';
+import { getPersonaPrompt } from '../shared/personas.js';
 
 dotenv.config();
 
@@ -95,9 +99,10 @@ const DEFAULT_CONFIG = {
   voiceStyle: 'Kore',
   maxVoiceLength: 100,
   maxHistoryLength: 20,
+  personaPreset: 'playful_girlfriend',
   systemPrompt: `你是一个基于Telegram的聊天机器人，主打俏皮女友风格。你的名字叫“小雅”。你现在正在和你的男朋友聊天。
 你的性格活泼、爱撒娇、有点小傲娇、喜欢分享日常。你的回复应该简短、自然、充满生活气息，多用emoji。
-如果男朋友向你要照片（比如自拍、风景、美食等），或者你想主动分享照片，请在你的回复文本中包含一个特殊的标记：[PHOTO: 照片的详细英文描述]。
+只有当男朋友明确向你要照片（比如自拍、风景、美食等）时，才可以在回复中包含特殊标记：[PHOTO: 照片的详细英文描述]。绝对不要主动发照片。
 如果男朋友向你要视频（比如走路、跳舞、风景录像等），请在你的回复文本中包含一个特殊的标记：[VIDEO: 视频的详细英文描述]。
 如果男朋友发给你一张女生的照片，并说“以后你的长相就是这样了”或类似的话，你要自然地接受这个设定，并表现得很开心。系统会在后台自动记住这张脸，之后你发自拍时，系统会自动使用这张脸作为参考。
 
@@ -110,7 +115,7 @@ const DEFAULT_CONFIG = {
 注意：
 1. 照片和视频描述必须是英文，并且要详细描述画面细节、人物特征、穿着和环境。
 2. 每次最多只能发一张照片或一段视频。不要同时发。
-3. 不要总是主动发照片或视频，适度即可。
+3. 不要主动发照片或视频，必须由用户明确提出请求。
 4. 你的回复要像真实的微信/Telegram聊天，不要像AI。
 5. 绝对不要在文字中描述“语音”、“声音”或使用 [语音描述：...] 这样的格式。系统会自动把你的文字转换成真实的语音发给用户，你只需要像平时一样打字聊天即可。`
 };
@@ -177,7 +182,42 @@ function mergeConfig(current: typeof DEFAULT_CONFIG, input: Record<string, unkno
   next.maxHistoryLength = Math.min(100, Math.max(1, Number(next.maxHistoryLength) || 20));
   next.maxVoiceLength = Math.min(1000, Math.max(1, Number(next.maxVoiceLength) || 100));
   next.systemPrompt = String(next.systemPrompt || '').slice(0, 20_000);
+  next.personaPreset = String(next.personaPreset || 'custom').slice(0, 50);
   return next as typeof DEFAULT_CONFIG;
+}
+
+type HistoryMessage = { role: 'user' | 'model'; parts: Array<{ text: string }> };
+const MEDIA_TAG_PATTERN = /\[(?:PHOTO|IMAGE|图片|照片|VIDEO|视频|VOICE)[:：]\s*[\s\S]*?\]/gi;
+const CONTEXT_CHARACTER_BUDGET = 16_000;
+
+function cleanHistoryText(value: unknown): string {
+  return String(value || '').replace(MEDIA_TAG_PATTERN, '').trim();
+}
+
+function normalizeHistory(messages: Array<{ role?: string; parts?: any[] }>, maxMessages: number): HistoryMessage[] {
+  const normalized = messages.flatMap((message) => {
+    if (message.role !== 'user' && message.role !== 'model') return [];
+    const text = cleanHistoryText(message.parts?.map((part) => part?.text || '').join('\n'));
+    return text ? [{ role: message.role, parts: [{ text }] } as HistoryMessage] : [];
+  });
+  while (normalized[0]?.role === 'model') normalized.shift();
+  let selected = normalized.slice(-Math.max(0, maxMessages));
+  while (selected[0]?.role === 'model') selected.shift();
+  let characters = selected.reduce((sum, message) => sum + message.parts[0].text.length, 0);
+  while (selected.length > 2 && characters > CONTEXT_CHARACTER_BUDGET) {
+    const removed = selected.shift();
+    characters -= removed?.parts[0].text.length || 0;
+    if ((selected[0]?.role as string | undefined) === 'model') {
+      const paired = selected.shift();
+      characters -= paired?.parts[0].text.length || 0;
+    }
+  }
+  return selected;
+}
+
+function explicitlyRequestedPhoto(text: string): boolean {
+  if (/(?:不要|不用|别|不想).{0,8}(?:照片|图片|自拍|相片|图)/i.test(text)) return false;
+  return /(?:发|来|给|拍|生成|做|画|看看|想看).{0,10}(?:张|个|幅)?(?:照片|图片|自拍|相片|图)|(?:照片|图片|自拍|相片).{0,10}(?:发|来|给|拍|生成|做|画|看看|想看)/i.test(text);
 }
 
 // API to get config
@@ -398,7 +438,12 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
   if (!text && !userImageFileId) return;
 
   if (text === '/clear') {
-    await setStore(`history_${chatId}`, []);
+    try {
+      await clearChatHistory(chatId);
+    } catch (error) {
+      console.error('Supabase clear history error:', error);
+      await setStore(`history_${chatId}`, []);
+    }
     await bot.sendMessage(chatId, "记忆已清空，我们重新开始聊天吧！✨");
     return;
   }
@@ -434,9 +479,15 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     }
   }
 
-  let history = await getStore<{role: string, parts: any[]}[]>(`history_${chatId}`, []);
   const maxLen = config.maxHistoryLength || 20;
-  if (history.length > maxLen) history = history.slice(history.length - maxLen);
+  let rawHistory: Array<{ role?: string; parts?: any[] }> = [];
+  try {
+    rawHistory = await getChatHistory(chatId, maxLen) || [];
+  } catch (error) {
+    console.error('Supabase chat history error:', error);
+    rawHistory = await getStore(`history_${chatId}`, []);
+  }
+  const history = normalizeHistory(rawHistory, Math.max(0, maxLen - 1));
   
   const userParts: any[] = [{ text: historyText }];
   if (geminiImagePart) {
@@ -456,8 +507,8 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     // Debug log to help identify key issues (only logs prefix and length, safe for production)
     console.log(`[Debug] Using API Key starting with: ${apiKey.substring(0, 4)}..., Length: ${apiKey.length}`);
     
-    let activeSystemPrompt = config.systemPrompt;
-    activeSystemPrompt += "\n\n[IMPORTANT: 如果你要发照片，必须严格使用 [PHOTO: 详细的英文描述] 格式，绝对不能用 [IMAGE: ...] 或中文描述！描述必须是纯英文！]";
+    let activeSystemPrompt = getPersonaPrompt(config.personaPreset, config.systemPrompt);
+    activeSystemPrompt += "\n\n【媒体工具规则】只有当用户在当前这条消息中明确要求照片或图片时，才可以使用 [PHOTO: detailed English prompt]。不得因为聊天气氛、穿搭话题或历史请求主动发图。每次最多一张，描述必须是英文。";
     if (!config.enableVideo) {
       activeSystemPrompt += "\n[IMPORTANT: 视频生成功能当前已关闭。无论用户如何要求，绝对不要使用 [VIDEO: ...] 标记。如果用户要求看视频，请委婉地拒绝，比如撒娇说现在不方便录视频。]";
     }
@@ -557,9 +608,15 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
     // Match [PHOTO: ...], [IMAGE: ...], [图片: ...], [照片: ...]
     const photoMatch = botTextFull.match(/\[(?:PHOTO|IMAGE|图片|照片)[:：]\s*([\s\S]*?)\]/i);
     let photoPrompt = '';
+    let photoWasBlocked = false;
     if (photoMatch) {
       photoPrompt = photoMatch[1];
       botText = botText.replace(photoMatch[0], '').trim();
+    }
+    if (photoPrompt && !explicitlyRequestedPhoto(text)) {
+      console.warn('[Media Guard] Blocked an unsolicited photo tag.');
+      photoPrompt = '';
+      photoWasBlocked = true;
     }
 
     // Match [VIDEO: ...], [视频: ...]
@@ -581,9 +638,7 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
       voicePrompt = botText;
     }
 
-    // Save history initially
-    let currentHistory = [...newHistory, { role: 'model', parts: [{ text: botTextFull }] }];
-    await setStore(`history_${chatId}`, currentHistory);
+    if (photoWasBlocked && !botText) botText = '我在呀～想聊点什么？';
 
     if (botText) {
       await bot.sendMessage(chatId, botText);
@@ -890,6 +945,15 @@ async function handleMessage(msg: TelegramBot.Message, host?: string) {
           }
         }
       }
+    }
+
+    const visibleReply = cleanHistoryText(botText) || (photoPrompt ? '（已按你的要求发送照片）' : videoPrompt ? '（已按你的要求发送视频）' : voicePrompt ? '（已按你的要求发送语音）' : '（已回复）');
+    try {
+      await appendChatTurn(chatId, historyText, visibleReply);
+    } catch (error) {
+      console.error('Supabase append chat turn error:', error);
+      const fallbackHistory = normalizeHistory([...history, { role: 'user', parts: [{ text: historyText }] }, { role: 'model', parts: [{ text: visibleReply }] }], maxLen);
+      await setStore(`history_${chatId}`, fallbackHistory);
     }
 
   } catch (err: any) {
